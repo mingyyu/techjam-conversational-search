@@ -312,6 +312,83 @@ class CatalogIndex:
             return {packed} if packed else set()
         return {packed[i:i + 3] for i in range(len(packed) - 2)}
 
+    def resolve_categories(self, text: str, floor: float = 0.50,
+                           top_n: int = 8, cap: int = 15000) -> list[int]:
+        """Find the product families a free-form sentence is talking about.
+
+        `category_lookup` compares a spoken label against catalog labels, which
+        needs the caller to have isolated the label first. That only works when
+        the sentence follows the simulator's template. Here the whole utterance
+        is the input, so similarity is measured as *label coverage* -- what share
+        of the catalog label's own words appear in the message -- rather than
+        Jaccard overlap, which a long sentence would drive to nearly zero.
+
+        As with `category_lookup`, every plausible family above the floor is
+        pooled instead of committing to the best one.
+        """
+        spoken = set(tokenize(text))
+        if not spoken:
+            return []
+
+        scored: list[tuple[float, int, str]] = []
+        for label in self.category_members:
+            words = set(tokenize(label))
+            if not words:
+                continue
+            coverage = len(words & spoken) / len(words)
+            if coverage >= floor:
+                # More words matched is stronger evidence than a short label
+                # matching by luck, so it breaks ties ahead of the label itself.
+                scored.append((coverage, len(words & spoken), label))
+        if not scored:
+            return []
+
+        scored.sort(reverse=True)
+        pooled: list[int] = []
+        for _, _, label in scored[:top_n]:
+            pooled.extend(self.category_members[label])
+            if len(pooled) >= cap:
+                break
+        return list(dict.fromkeys(pooled))
+
+    def category_neighbours(self, label: str, floor: float = 0.34,
+                            top_n: int = 6, cap: int = 20000) -> list[int]:
+        """Products from families adjacent to the one named.
+
+        Cross-category scenario matching, for the browsing track. A customer who
+        is still exploring "Shoes Fashion Sneakers" is plausibly also served by
+        "Shoes Athletic" or "Shoes Fashion Boots", and the purchase they
+        eventually make need not sit in the aisle they happened to name first.
+
+        The buying track must not do this: a stated requirement is precise, and
+        widening the pool there only adds ways to rank the wrong thing highly.
+        """
+        wanted = set(tokenize(label)) - GENERIC_CATEGORY_PARTS
+        if not wanted:
+            return []
+
+        scored: list[tuple[float, int, str]] = []
+        for candidate in self.category_members:
+            other = set(tokenize(candidate)) - GENERIC_CATEGORY_PARTS
+            if not other:
+                continue
+            overlap = len(wanted & other)
+            if not overlap:
+                continue
+            similarity = overlap / len(wanted | other)
+            if similarity >= floor:
+                scored.append((similarity, overlap, candidate))
+        if not scored:
+            return []
+
+        scored.sort(reverse=True)
+        pooled: list[int] = []
+        for _, _, candidate in scored[:top_n]:
+            pooled.extend(self.category_members[candidate])
+            if len(pooled) >= cap:
+                break
+        return list(dict.fromkeys(pooled))
+
     def category_lookup(self, label: str, floor: float = 0.50,
                         cap: int = 12000) -> list[int]:
         """Resolve a spoken product family to candidate products.

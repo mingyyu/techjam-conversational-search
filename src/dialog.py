@@ -30,12 +30,119 @@ NO_PREFERENCE_RE = re.compile(
 
 OVERRIDE_MARKERS = ("ignore my earlier", "actually,", "instead of")
 
+# The customer rejecting the current list and asking for a concrete question.
+#
+# The evaluator emits this only when `ask_attribute` comes back as None, for any
+# scenario -- it is not the boundary marker it looks like. This agent always
+# names an attribute, so the branch is currently unreachable; it is kept as a
+# guard so a future clarification policy that declines to ask cannot silently
+# waste the turn. The real boundary signal is the "no preference" reply below,
+# which NO_PREFERENCE_RE already handles.
+BOUNDARY_RE = re.compile(
+    r"not quite right"
+    r"|ask me about one specific"
+    r"|ask me something specific"
+    r"|be more specific"
+    r"|none of (?:these|those)"
+    r"|(?:these|those) (?:aren'?t|are not) (?:it|right|what)",
+    re.I,
+)
+
+# The evaluator's simulated customer speaks in a fixed set of sentence shapes.
+# When a message matches one of them the regex path reads it exactly and for
+# free, so the LLM layer is not consulted at all. Anything else is free-form
+# and the regexes cannot be trusted on it -- not merely because they may miss,
+# but because they may mis-fire: "I'm looking for a polyester piece" trips
+# OPENING_RE and installs a garbage category that poisons the whole session.
+# Clauses distinctive enough to trust anywhere in the message, not just at the
+# start. A customer who prefixes a template with a sentence of small talk --
+# "I had a long day at the office. I'm looking for X. A key requirement is: Y."
+# -- is still speaking a template, and throwing that away to guess lexically
+# loses a parse the patterns below would have read exactly.
+UNANCHORED_TEMPLATE_RES = (
+    re.compile(r"a key requirement is:\s*\S", re.I),
+    re.compile(r"what matters is:\s*\S", re.I),
+    re.compile(r"ignore my earlier preference", re.I),
+    re.compile(r"what i need is:\s*\S", re.I),
+    re.compile(r"(?:don't|do not|dont) have (?:an? )?(?:additional )?"
+               r"preference for \w+", re.I),
+    re.compile(r"but i'?m still exploring", re.I),
+)
+
+TEMPLATE_RES = (
+    re.compile(r"^i'?m looking for .+?\. a key requirement is: .+", re.I),
+    re.compile(r"^i'?m looking for .+?, but i'?m still exploring\.?$", re.I),
+    re.compile(r"^for that, what matters is: .+", re.I),
+    re.compile(r"^actually, ignore my earlier preference\. what i need is: .+", re.I),
+    re.compile(r"^i don'?t have (?:an? )?(?:additional )?preference for \w+", re.I),
+    re.compile(r"^those options are not quite right yet\.", re.I),
+)
+
+
+_CONTENT_RE = re.compile(r"[a-z0-9%]+", re.I)
+
+# Conversational scaffolding. Everything a shopper says to be polite or to frame
+# the request, none of which appears in product text and all of which dilutes a
+# BM25 query. Deliberately does not include product words.
+_FILLER = {
+    "i", "im", "id", "ive", "a", "an", "the", "and", "or", "but", "if", "so",
+    "to", "of", "in", "on", "at", "for", "with", "from", "by", "as", "is",
+    "are", "am", "was", "were", "be", "been", "do", "does", "did", "have",
+    "has", "had", "can", "could", "would", "will", "should", "my", "me", "you",
+    "your", "it", "its", "that", "this", "these", "those", "there", "they",
+    "them", "we", "us", "our", "what", "which", "when", "how", "who", "why",
+    "any", "some", "something", "anything", "one", "ones", "thing", "things",
+    "looking", "look", "need", "needs", "want", "wants", "wanted", "like",
+    "prefer", "get", "find", "hoping", "hope", "after", "really", "quite",
+    "very", "just", "also", "too", "much", "more", "most", "please", "thanks",
+    "thank", "hi", "hey", "hello", "ok", "okay", "sure", "yes", "no", "not",
+    "matters", "matter", "important", "importantly", "key", "requirement",
+    "requirements", "preference", "preferences", "option", "options", "shop",
+    "shopping", "buy", "purchase", "pair", "piece", "item", "product",
+}
+
+
+# Function words a bare catalog category label never contains.
+_PROSE_MARKERS = {
+    "a", "an", "the", "that", "this", "these", "those", "my", "your", "some",
+    "any", "it", "its", "which", "with", "for", "and", "or", "in", "on", "of",
+    "to", "is", "are", "was", "were", "thats", "im", "need", "want", "am",
+}
+
+
+def looks_templated(message: str) -> bool:
+    """Whether the simulator's own wording produced this message."""
+    text = (message or "").strip()
+    if not text:
+        return True
+    if any(pattern.search(text) for pattern in TEMPLATE_RES):
+        return True
+    if any(pattern.search(text) for pattern in UNANCHORED_TEMPLATE_RES):
+        return True
+    # "I'm looking for <category>. <soft preference>" -- the intent-override
+    # opening. The tell is the clause before the period: the simulator inserts a
+    # bare catalog label ("Accessories Belts", "Tops & Tees Tanks & Camis"),
+    # which is short and carries no articles or pronouns. Free-form prose that
+    # happens to start the same way ("I'm looking for a polyester piece that's
+    # imported") does carry them, and must not take the regex path.
+    head = re.match(r"^i'?m looking for ([^.]{1,80})\.", text, re.I)
+    if not head:
+        return False
+    words = [w for w in head.group(1).replace("&", " ").split() if w]
+    return len(words) <= 7 and not (
+        {w.lower().strip(",'") for w in words} & _PROSE_MARKERS)
+
 
 @dataclass
 class Constraint:
     text: str
     weight: float
     revocable: bool = False
+    # True when the text was scraped out of a sentence no pattern understood,
+    # rather than stated as a requirement or disclosed in answer to a question.
+    # Such text is content words plus whatever scaffolding survived filtering,
+    # so it is not precise enough to justify switching to the buying track.
+    salvaged: bool = False
 
 
 @dataclass
@@ -43,41 +150,96 @@ class DialogState:
     session_id: str
     profile: dict
     category: str | None = None
+    categories: list[str] = field(default_factory=list)
+    free_text: list[str] = field(default_factory=list)
     constraints: list[Constraint] = field(default_factory=list)
     shown: set[str] = field(default_factory=set)
     dead_attributes: set[str] = field(default_factory=set)
     override_seen: bool = False
+    wants_specific: bool = False
     expects_override: bool = False
     turns: int = 0
 
     # -- mutation ----------------------------------------------------------
 
-    def add(self, text: str, weight: float, revocable: bool = False) -> bool:
+    def add(self, text: str, weight: float, revocable: bool = False,
+            salvaged: bool = False) -> bool:
         text = text.strip().rstrip(".")
         if not text:
             return False
         key = text.lower()
         if any(c.text.lower() == key for c in self.constraints):
             return False
-        self.constraints.append(Constraint(text, weight, revocable))
+        self.constraints.append(Constraint(text, weight, revocable, salvaged))
         return True
 
     def apply_override(self, new_value: str) -> None:
-        """Erase revocable preferences, then assert the replacement."""
+        """Erase revocable preferences, then assert the replacement.
+
+        Everything shown so far is re-admitted. The protocol suppresses
+        conversion until the override lands, so a product rejected on an earlier
+        turn was never actually rejected -- and the ranking that produced those
+        turns has just been invalidated anyway. Keeping them eliminated is how
+        the target gets silently discarded.
+
+        This does not depend on having predicted the override in advance, which
+        is what `expects_override` tries to do and cannot do reliably once the
+        customer stops speaking in templates.
+        """
         self.override_seen = True
         self.constraints = [c for c in self.constraints if not c.revocable]
         self.add(new_value, WEIGHT_HARD)
+        self.shown.clear()
+
+    def readmit_early_turns(self) -> None:
+        """Undo eliminations from the turns an override could still have covered.
+
+        A safety net for the case where the override arrived worded in a way
+        nothing recognised. Overrides land on turn 3 or 4, so by turn 5 a
+        still-unconverted session has nothing to lose by reconsidering what it
+        already discarded.
+        """
+        if not self.override_seen:
+            self.shown.clear()
 
     # -- parsing -----------------------------------------------------------
 
     def ingest(self, message: str) -> None:
-        """Update state from one customer utterance."""
-        self.turns += 1
+        """Update state from one customer utterance.
+
+        Templated wording goes down the pattern path. Free-form wording is
+        routed away from it entirely, to the lexical fallback below.
+        """
         text = (message or "").strip()
+
+        if text and BOUNDARY_RE.search(text):
+            self.turns += 1
+            self.wants_specific = True
+            self.dead_attributes.add("other")
+            return
+
+        if text and not looks_templated(text):
+            # Free-form wording. The regexes below are not merely unlikely to
+            # match it -- they mis-fire on it: "I'm looking for a polyester
+            # piece" trips OPENING_RE and installs that whole clause as the
+            # category, routing the session into an aisle that does not exist.
+            # So free-form text never reaches them.
+            self.turns += 1
+            self._lexical_ingest(text)
+            return
+
+        self.turns += 1
         if not text:
             return
 
         lowered = text.lower()
+
+        # Not a constraint -- an instruction about how to ask the next
+        # question. See BOUNDARY_RE on why this is a guard rather than a fix.
+        if BOUNDARY_RE.search(text):
+            self.wants_specific = True
+            self.dead_attributes.add("other")
+            return
 
         # An override rewrites intent and must be handled before anything else.
         override = OVERRIDE_RE.search(text)
@@ -137,6 +299,28 @@ class DialogState:
         if requirement:
             self.add(requirement.group(1), WEIGHT_HARD)
 
+    def _lexical_ingest(self, text: str) -> None:
+        """Salvage a message no template matched, using no model and no network.
+
+        Previously this case produced nothing at all: no category, no
+        constraint, the turn simply discarded. The retrieval layer was then
+        ranking all 50,000 products by popularity for the rest of the session.
+
+        Anything is better than nothing here. The conversational scaffolding is
+        stripped and whatever content words remain become a constraint, which
+        BM25 can score even though it will never match a catalog phrase
+        verbatim. The raw text is also kept so the agent can resolve a product
+        family from the sentence as a whole.
+        """
+        self.free_text.append(text)
+        content = [w for w in _CONTENT_RE.findall(text.lower())
+                   if len(w) > 1 and w not in _FILLER]
+        if not content:
+            return
+        # Volunteered detail, not a stated requirement: same standing as an
+        # answer to one of our questions.
+        self.add(" ".join(content[:20]), WEIGHT_ANSWER, salvaged=True)
+
     # -- queries -----------------------------------------------------------
 
     def active_constraints(self) -> list[Constraint]:
@@ -144,6 +328,19 @@ class DialogState:
 
     def has_information(self) -> bool:
         return bool(self.constraints)
+
+    def has_hard_constraint(self) -> bool:
+        """Whether something precise enough to filter on has actually landed.
+
+        This is what separates the buying track from the browsing track.
+        Filterable means the customer named something precise: a stated
+        requirement, or a concrete answer to one of our questions -- the moment
+        either lands, precision has something to work with. A revocable
+        background leaning does not count, and neither does text salvaged from
+        a sentence nothing parsed, which carries scaffolding as well as content.
+        """
+        return any(c.weight >= WEIGHT_ANSWER and not c.revocable and not c.salvaged
+                   for c in self.constraints)
 
     def eliminations_are_valid(self) -> bool:
         """Whether a non-converting turn proves the shown products are wrong.

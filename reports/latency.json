@@ -1,0 +1,19 @@
+{
+  "index_build_s": 8.17,
+  "catalog_parse_s": 0.55,
+  "turns_measured": 314,
+  "per_turn_ms": {
+    "mean": 21.0,
+    "median": 8.8,
+    "p95": 61.2,
+    "p99": 78.6,
+    "max": 127.5
+  },
+  "full_200_session_run_s": 6.7,
+  "tokens": {
+    "prompt_tokens": 0,
+    "completion_tokens": 0,
+    "total_tokens": 0
+  },
+  "score": 0.910201
+}

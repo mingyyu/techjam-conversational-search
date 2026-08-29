@@ -1,0 +1,43 @@
+{
+  "generation_date": "2026-08-29",
+  "generation_engine": "Gemini 3.7 Flash Assistant Pipeline",
+  "random_seed": 42,
+  "total_unique_messages_covered": 971,
+  "files": {
+    "reports/heldout_natural.json": {
+      "style": "Fluent natural conversational chat",
+      "message_count": 971,
+      "description": "Natural human phrasing preserving all product types, constraints, and intent without quoting catalog listing templates verbatim."
+    },
+    "reports/heldout_terse.json": {
+      "style": "Telegraphic lowercase search queries",
+      "message_count": 971,
+      "description": "Concise, punctuation-free, lowercase search keywords preserving core requirements."
+    },
+    "reports/heldout_rambling.json": {
+      "style": "Chatty conversational text with contextual chatter",
+      "message_count": 971,
+      "description": "Realistic customer backstories and context sentences preceding exact requirement specifications."
+    },
+    "reports/heldout_typos.json": {
+      "style": "Natural chat with realistic typing mistakes",
+      "message_count": 971,
+      "description": "Natural phrasing with human keyboard slip typos, dropped apostrophes, transposed letters, and casual casing."
+    },
+    "reports/heldout_indirect.json": {
+      "style": "Functional implication without catalog keywords",
+      "message_count": 971,
+      "description": "Requirements expressed through physical utility, sensory feel, and functional descriptions rather than literal catalog vocabulary."
+    },
+    "reports/heldout_lossy.json": {
+      "style": "Information-loss degradation set",
+      "message_count": 971,
+      "description": "Deliberately drops secondary constraints in multi-constraint messages and relaxes specific categories to broad parents to evaluate degradation."
+    },
+    "reports/heldout_categories.json": {
+      "style": "Category-naming stress set",
+      "message_count": 971,
+      "description": "Rewrites product-family names in opening messages across everyday names, synonyms, parents, children, and brand-led phrasing while keeping sentence frame intact."
+    }
+  }
+}

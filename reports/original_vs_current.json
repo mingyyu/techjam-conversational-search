@@ -1,0 +1,22 @@
+{
+  "ORIGINAL|public|clean": 0.906751,
+  "ORIGINAL|public|natural": 0.496697,
+  "ORIGINAL|public|terse": 0.452044,
+  "ORIGINAL|public|rambling": 0.881506,
+  "ORIGINAL|public|typos": 0.452044,
+  "ORIGINAL|public|indirect": 0.481852,
+  "ORIGINAL|public|categories": 0.88316,
+  "ORIGINAL|public|lossy": 0.810134,
+  "ORIGINAL|matched|clean": 0.885842,
+  "ORIGINAL|matched|natural": 0.861889,
+  "CURRENT|public|clean": 0.904322,
+  "CURRENT|public|natural": 0.813806,
+  "CURRENT|public|terse": 0.832505,
+  "CURRENT|public|rambling": 0.79249,
+  "CURRENT|public|typos": 0.839178,
+  "CURRENT|public|indirect": 0.769359,
+  "CURRENT|public|categories": 0.883042,
+  "CURRENT|public|lossy": 0.781854,
+  "CURRENT|matched|clean": 0.878752,
+  "CURRENT|matched|natural": 0.884537
+}

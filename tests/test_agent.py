@@ -12,6 +12,7 @@ import unittest
 from pathlib import Path
 
 from src.dialog import DialogState, WEIGHT_HARD, WEIGHT_SOFT
+from src.routing import IntentRouter, TRACKS, BUYING, BROWSING
 from src.catalog import coarse_category, normalise_phrase, attribute_phrases
 from src.shopping_agent import ShoppingAgent, ATTRIBUTES
 
@@ -235,3 +236,59 @@ class TestOrchestration(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DualTrackRoutingTests(unittest.TestCase):
+    """Pillar I: intent must be inferred, since the harness never supplies it."""
+
+    def state(self):
+        return DialogState(session_id="s", profile={})
+
+    def test_stated_requirement_routes_to_buying(self):
+        router = IntentRouter()
+        st = self.state()
+        st.ingest("I'm looking for Women Jeans. A key requirement is: 100% Cotton.")
+        track = router.observe("I'm looking for Women Jeans. A key requirement is: "
+                               "100% Cotton.", st, turn=1)
+        self.assertEqual(track.name, BUYING)
+
+    def test_open_ended_opening_routes_to_browsing(self):
+        router = IntentRouter()
+        st = self.state()
+        msg = "I'm looking for Women Jeans, but I'm still exploring."
+        st.ingest(msg)
+        self.assertEqual(router.observe(msg, st, turn=1).name, BROWSING)
+
+    def test_untemplated_requirement_still_routes_to_buying(self):
+        """Detection must not depend on the evaluator's sentence shapes."""
+        router = IntentRouter()
+        st = self.state()
+        msg = "i need jeans that are definitely 100% cotton, must be machine washable"
+        st.ingest(msg)
+        self.assertEqual(router.observe(msg, st, turn=1).name, BUYING)
+
+    def test_browsing_then_requirement_switches_track(self):
+        router = IntentRouter()
+        st = self.state()
+        first = "I'm looking for Women Jeans, but I'm still exploring."
+        st.ingest(first)
+        self.assertEqual(router.observe(first, st, turn=1).name, BROWSING)
+        second = "For that, what matters is: 100% Cotton."
+        st.ingest(second)
+        self.assertEqual(router.observe(second, st, turn=2).name, BUYING)
+        self.assertTrue(router.transitions)
+
+    def test_buying_track_leans_harder_on_the_customer_s_own_words(self):
+        """What the split actually buys, after measurement.
+
+        Discounting the popularity prior on the buying track was the original
+        design and was rejected on evidence: it helps only when targets are
+        long-tail, and real purchases are not. The tracks now differ in how much
+        weight the customer's own vocabulary carries.
+        """
+        self.assertGreater(TRACKS[BUYING].w_bm25, TRACKS[BROWSING].w_bm25)
+        self.assertEqual(TRACKS[BUYING].w_popularity, TRACKS[BROWSING].w_popularity)
+
+    def test_browsing_track_spreads_picks_and_buying_does_not(self):
+        self.assertTrue(TRACKS[BROWSING].diversify_early)
+        self.assertFalse(TRACKS[BUYING].diversify_early)

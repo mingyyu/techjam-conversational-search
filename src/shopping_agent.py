@@ -29,6 +29,7 @@ from collections import defaultdict
 from .catalog import CatalogIndex, tokenize
 from .dialog import DialogState
 from .profile import distill
+from .routing import IntentRouter, TRACKS, BROWSING
 from .strategy import Orchestrator, BROADEN, DIVERSIFY
 
 # Blend weights. Tuned on the 200 public sessions; see tune.py.
@@ -39,7 +40,12 @@ W_PROFILE = 0.05    # anonymised preference tags
 W_RATING_FIT = 0.0  # measured negative on the public set; see README
 USE_PROFILE = True          # personalized context distillation
 USE_ORCHESTRATION = True    # runtime strategy switching
+USE_DUAL_TRACK = True       # buying/browsing intent routing; see src/routing.py
 BROADEN_POOL = 3000         # candidates pulled in when routing looks wrong
+POOL_TRUST_LIMIT = 3000     # above this the pool was never really narrowed,
+                            # so the buying track stops discounting the prior
+CROSS_CATEGORY_FLOOR = 400  # browse wider only when the named aisle is this thin
+                            # (inert: browsing track ships cross_category=False)
 STORE_CAP = 2               # max picks per seller while diversifying
 SEMANTIC_EXPANSION = False  # corpus-learned synonym bridging; see reports/robustness.md
 EXPANSION_DECAY = 0.45      # a synonym is worth this fraction of a literal hit
@@ -88,7 +94,9 @@ class ShoppingAgent:
         self.state = DialogState(session_id=session_id, profile=user_profile or {})
         self.profile = distill(user_profile)
         self.orchestrator = Orchestrator()
+        self.router = IntentRouter()
         self._candidates: list[int] | None = None
+        self._track = TRACKS[BROWSING]
 
     def respond(self, session_id: str, user_message: str,
                 turn: int, top_k: int) -> dict:
@@ -96,12 +104,20 @@ class ShoppingAgent:
             self.reset(session_id, {})
 
         state = self.state
-        before = len(state.constraints)
+        # One-shot safety net: by turn 5 any intent override has already landed,
+        # so anything discarded while conversion was suppressed comes back.
+        if turn == 5:
+            state.readmit_early_turns()
+        before = (len(state.constraints), state.category, tuple(state.categories))
         state.ingest(user_message)
-        changed = len(state.constraints) != before
+        changed = (len(state.constraints), state.category, tuple(state.categories)) != before
 
-        if self._candidates is None or changed:
-            self._candidates = self._select_candidates(state)
+        track = (self.router.observe(user_message, state, turn)
+                 if USE_DUAL_TRACK else TRACKS[BROWSING])
+        # The track decides how the pool is built, so a switch rebuilds it.
+        if self._candidates is None or changed or track.name != self._track.name:
+            self._track = track
+            self._candidates = self._select_candidates(state, track)
 
         mode = self.orchestrator.observe(
             turn=turn,
@@ -114,8 +130,8 @@ class ShoppingAgent:
         if mode in (BROADEN, DIVERSIFY):
             self._candidates = self._broadened(state, self._candidates)
 
-        ranked = self._rank(state, self._candidates, top_k,
-                            diversify=(mode == DIVERSIFY))
+        ranked = self._rank(state, self._candidates, top_k, track,
+                            diversify=(mode == DIVERSIFY or track.diversify_early))
         if state.eliminations_are_valid():
             for asin in ranked:
                 state.shown.add(asin)
@@ -127,17 +143,44 @@ class ShoppingAgent:
             "message": message,
             "ask_attribute": attribute,
             "recommendations": [{"parent_asin": asin} for asin in ranked],
+            # Fully offline: no model is called, so nothing is ever consumed.
             "usage": {"prompt_tokens": 0, "completion_tokens": 0},
         }
 
     # -- candidate selection ----------------------------------------------
 
-    def _select_candidates(self, state: DialogState) -> list[int]:
-        """Category filter first; fall back to lexical retrieval."""
-        if state.category:
-            members = self.index.category_lookup(state.category)
-            if members:
-                return list(members)
+    def _select_candidates(self, state: DialogState, track) -> list[int]:
+        """Category filter first; fall back to lexical retrieval.
+
+        Both tracks keep the named-label filter strict. Adjacent-family pooling
+        is wired up for the browsing track but ships disabled: it was measured
+        to cost score and to change nothing under reworded input, because
+        reworded sessions take the `resolve_categories` path below, which
+        already pools every plausible family. See src/routing.py.
+        """
+        labels = state.categories or ([state.category] if state.category else [])
+        if labels:
+            pooled: list[int] = []
+            for label in labels:
+                pooled.extend(self.index.category_lookup(label))
+            # Cross-category scenario matching, browsing track only, and only
+            # when the named aisle is small enough that recall is genuinely at
+            # risk. Widening a large pool measurably hurts: it adds candidates
+            # that can outrank the target without adding the target.
+            if track.cross_category and len(set(pooled)) < CROSS_CATEGORY_FLOOR:
+                for label in labels:
+                    pooled.extend(self.index.category_neighbours(label))
+            if pooled:
+                return list(dict.fromkeys(pooled))
+
+        if state.free_text:
+            # No template named the product family, so read it out of the
+            # sentence as a whole. This is the difference between searching a
+            # few hundred plausible products and ranking all fifty thousand by
+            # popularity, which is what the agent fell back to before.
+            pooled = self.index.resolve_categories(" ".join(state.free_text))
+            if pooled:
+                return pooled
 
         query = " ".join(c.text for c in state.constraints)
         if state.category:
@@ -188,14 +231,27 @@ class ShoppingAgent:
         return scores
 
     def _rank(self, state: DialogState, candidates: list[int],
-              top_k: int, diversify: bool = False) -> list[str]:
+              top_k: int, track, diversify: bool = False) -> list[str]:
         totals: dict[int, float] = defaultdict(float)
 
         trust = self.profile.popularity_trust if USE_PROFILE else 1.0
         target_rating = self.profile.rating_target if USE_PROFILE else None
 
+        # Slot decay on the popularity prior.
+        #
+        # The buying track discounts the prior so a stated requirement is not
+        # dragged back towards best-sellers. That is only safe when the pool is
+        # small enough to mean the requirement actually narrowed something. When
+        # the customer's wording left the category vague the pool stays huge,
+        # the constraint is not trustworthy, and the prior is the best signal
+        # available -- so the discount decays back to the browsing weight in
+        # proportion to how little the pool was narrowed.
+        w_popularity = track.w_popularity
+        if len(candidates) > POOL_TRUST_LIMIT:
+            w_popularity = TRACKS[BROWSING].w_popularity
+
         for pos in candidates:
-            score = W_POPULARITY * trust * self.index.popularity[pos]
+            score = w_popularity * trust * self.index.popularity[pos]
             if target_rating is not None:
                 gap = abs(self.index.avg_rating[pos] - target_rating)
                 score += W_RATING_FIT * max(0.0, 1.0 - gap / 2.0)
@@ -209,18 +265,18 @@ class ShoppingAgent:
             specificity = self.index.phrase_specificity(constraint.text)
             for pos in self.index.phrase_lookup(constraint.text):
                 if pos in candidate_set:
-                    totals[pos] += weight * W_PHRASE * specificity
+                    totals[pos] += weight * track.w_phrase * specificity
 
             for pos, value in self._constraint_scores(constraint.text).items():
                 if pos in candidate_set:
-                    totals[pos] += weight * W_BM25 * value
+                    totals[pos] += weight * track.w_bm25 * value
 
         terms = self.profile.query_terms if USE_PROFILE else [
             str(t) for t in (state.profile.get("preference_tags") or [])]
         if terms:
             for pos, value in self._constraint_scores(" ".join(terms)).items():
                 if pos in candidate_set:
-                    totals[pos] += W_PROFILE * value
+                    totals[pos] += track.w_profile * value
 
         ordered = sorted(
             totals.items(),
@@ -268,7 +324,11 @@ class ShoppingAgent:
         if "other" not in state.dead_attributes:
             return "other"
 
-        if USE_PROFILE:
+        # If the customer has explicitly asked for a specific question, skip
+        # the profile's generic ordering and go straight to the attribute that
+        # splits the remaining pool most evenly. Reachable only via
+        # dialog.BOUNDARY_RE, which is a guard -- see the note there.
+        if not state.wants_specific and USE_PROFILE:
             for attribute in self.profile.attribute_order:
                 if attribute not in state.dead_attributes:
                     return attribute

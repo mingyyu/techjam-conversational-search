@@ -1,0 +1,9 @@
+# No third-party packages are required.
+#
+# The agent runs on the Python 3.10+ standard library alone. It imports only
+# json, math, re, dataclasses, collections and pathlib. There is no network
+# client, no model runtime, and no vector database, so the submission runs
+# unchanged under the CPU, memory, timeout and network restrictions the
+# organizer reserves the right to impose.
+#
+#     pip install -r requirements.txt    # intentionally a no-op

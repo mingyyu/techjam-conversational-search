@@ -1,0 +1,114 @@
+[
+  {
+    "dataset": "public",
+    "style": "clean",
+    "score": 0.910201,
+    "hit": 1.0,
+    "mrr": 0.738671,
+    "mttc": 1.57,
+    "scenario": {
+      "boundary": 1.0,
+      "browsing": 1.0,
+      "buying": 1.0,
+      "intent_override": 1.0
+    }
+  },
+  {
+    "dataset": "public",
+    "style": "natural",
+    "score": 0.807514,
+    "hit": 0.96,
+    "mrr": 0.578712,
+    "mttc": 3.305,
+    "scenario": {
+      "boundary": 0.9,
+      "browsing": 0.9375,
+      "buying": 0.975,
+      "intent_override": 1.0
+    }
+  },
+  {
+    "dataset": "public",
+    "style": "terse",
+    "score": 0.833894,
+    "hit": 0.965,
+    "mrr": 0.585315,
+    "mttc": 2.21,
+    "scenario": {
+      "boundary": 0.9,
+      "browsing": 0.95,
+      "buying": 0.9875,
+      "intent_override": 0.9667
+    }
+  },
+  {
+    "dataset": "public",
+    "style": "rambling",
+    "score": 0.886746,
+    "hit": 0.99,
+    "mrr": 0.716821,
+    "mttc": 2.165,
+    "scenario": {
+      "boundary": 1.0,
+      "browsing": 0.9875,
+      "buying": 0.9875,
+      "intent_override": 1.0
+    }
+  },
+  {
+    "dataset": "public",
+    "style": "typos",
+    "score": 0.837977,
+    "hit": 0.965,
+    "mrr": 0.607591,
+    "mttc": 2.34,
+    "scenario": {
+      "boundary": 0.9,
+      "browsing": 0.95,
+      "buying": 0.9875,
+      "intent_override": 0.9667
+    }
+  },
+  {
+    "dataset": "public",
+    "style": "indirect",
+    "score": 0.759334,
+    "hit": 0.895,
+    "mrr": 0.556446,
+    "mttc": 3.755,
+    "scenario": {
+      "boundary": 0.8,
+      "browsing": 0.8875,
+      "buying": 0.95,
+      "intent_override": 0.8
+    }
+  },
+  {
+    "dataset": "public",
+    "style": "categories",
+    "score": 0.883563,
+    "hit": 0.99,
+    "mrr": 0.726544,
+    "mttc": 2.47,
+    "scenario": {
+      "boundary": 1.0,
+      "browsing": 1.0,
+      "buying": 0.9875,
+      "intent_override": 0.9667
+    }
+  },
+  {
+    "dataset": "public",
+    "style": "lossy",
+    "score": 0.784783,
+    "hit": 0.935,
+    "mrr": 0.652944,
+    "mttc": 4.93,
+    "scenario": {
+      "boundary": 1.0,
+      "browsing": 0.8875,
+      "buying": 0.9875,
+      "intent_override": 0.9
+    }
+  }
+]
