@@ -1,0 +1,44 @@
+[
+  {
+    "variant": "full system",
+    "hit_rate": 1.0,
+    "mrr": 0.723768,
+    "mttc": 1.535,
+    "score": 0.90643
+  },
+  {
+    "variant": "no phrase match (paraphrase proxy)",
+    "hit_rate": 1.0,
+    "mrr": 0.653292,
+    "mttc": 1.65,
+    "score": 0.882988
+  },
+  {
+    "variant": "no popularity prior",
+    "hit_rate": 0.99,
+    "mrr": 0.652339,
+    "mttc": 2.2,
+    "score": 0.866702
+  },
+  {
+    "variant": "no elimination memory",
+    "hit_rate": 1.0,
+    "mrr": 0.713696,
+    "mttc": 1.535,
+    "score": 0.903409
+  },
+  {
+    "variant": "no clarification questions",
+    "hit_rate": 0.995,
+    "mrr": 0.650746,
+    "mttc": 1.745,
+    "score": 0.877824
+  },
+  {
+    "variant": "full system (repeat, determinism check)",
+    "hit_rate": 1.0,
+    "mrr": 0.723768,
+    "mttc": 1.535,
+    "score": 0.90643
+  }
+]

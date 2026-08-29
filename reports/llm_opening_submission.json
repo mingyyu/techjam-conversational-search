@@ -1,0 +1,19 @@
+{
+  "run": "submission/opening",
+  "hit_rate_at_10": 0.85,
+  "mrr": 0.672651,
+  "mttc": 3.57,
+  "score": 0.775395,
+  "scenario": {
+    "boundary": 1.0,
+    "browsing": 0.9875,
+    "buying": 0.9875,
+    "intent_override": 0.066667
+  },
+  "paraphrase_model": "qwen3.8:27b",
+  "paraphrase_calls_this_run": 91,
+  "paraphrase_tokens": {
+    "prompt": 9951,
+    "completion": 1714
+  }
+}

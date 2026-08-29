@@ -1,0 +1,58 @@
+[
+  {
+    "perturbation": "none",
+    "description": "clean public-set wording",
+    "hit_rate_at_10": 1.0,
+    "mrr": 0.725837,
+    "mttc": 1.55,
+    "score": 0.906751
+  },
+  {
+    "perturbation": "paraphrase",
+    "description": "requirement vocabulary rewritten",
+    "hit_rate_at_10": 1.0,
+    "mrr": 0.718218,
+    "mttc": 1.565,
+    "score": 0.904165
+  },
+  {
+    "perturbation": "category_lowercase",
+    "description": "category casing changed",
+    "hit_rate_at_10": 1.0,
+    "mrr": 0.725837,
+    "mttc": 1.55,
+    "score": 0.906751
+  },
+  {
+    "perturbation": "category_typo",
+    "description": "one character dropped from the category",
+    "hit_rate_at_10": 1.0,
+    "mrr": 0.724728,
+    "mttc": 1.58,
+    "score": 0.905818
+  },
+  {
+    "perturbation": "category_reorder",
+    "description": "category words reordered",
+    "hit_rate_at_10": 1.0,
+    "mrr": 0.720534,
+    "mttc": 1.555,
+    "score": 0.90506
+  },
+  {
+    "perturbation": "category_drop_word",
+    "description": "last category word missing",
+    "hit_rate_at_10": 0.995,
+    "mrr": 0.705454,
+    "mttc": 1.785,
+    "score": 0.893436
+  },
+  {
+    "perturbation": "category_generic",
+    "description": "category replaced by a vague label",
+    "hit_rate_at_10": 0.98,
+    "mrr": 0.756956,
+    "mttc": 2.56,
+    "score": 0.885887
+  }
+]
