@@ -20,3 +20,8 @@ tests/test_organizer_pipeline.py
 # Local working files
 scratch/
 results.json
+# Catalog archive: distributed by the organizer as a release download and
+# verified against data/SHA256SUMS. Not redistributed here -- see
+# DATA_ATTRIBUTION.md on following the source dataset's terms.
+/catalog.jsonl.gz
+/SHA256SUMS
