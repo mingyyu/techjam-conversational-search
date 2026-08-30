@@ -104,8 +104,22 @@ ATTRIBUTE_MARKERS = {
                  "travel", "beach"),
 }
 
+# Asking the open question is almost always the highest-yield move -- the
+# simulator answers `other` with any undisclosed constraint, where a named
+# attribute only returns constraints of that type -- so `other` is what the
+# policy lands on 93% of the time, three or four turns running in a long
+# session. The simulator reads `ask_attribute` and never the prose, so varying
+# the wording costs exactly nothing and stops the agent repeating one sentence
+# at the customer. Escalates from open to concrete as the conversation wears on.
+OTHER_QUESTIONS = (
+    "Is there anything else that matters most for this one?",
+    "Got it. Anything else I should be narrowing on?",
+    "Understood. Any other detail worth matching -- fit, material, occasion?",
+    "Anything at all you would still change about this one?",
+)
+
 QUESTIONS = {
-    "other": "Is there anything else that matters most for this one?",
+    "other": OTHER_QUESTIONS[0],
     "material": "Do you have a material preference?",
     "color": "Any colour you have in mind?",
     "size": "How should it fit -- any sizing preference?",
@@ -406,7 +420,10 @@ class ShoppingAgent:
 
         lead = self.index.titles[self.index.id_pos[ranked[0]]]
         lead = lead[:70].rsplit(" ", 1)[0] if len(lead) > 70 else lead
-        question = QUESTIONS.get(attribute or "other", QUESTIONS["other"])
+        if (attribute or "other") == "other":
+            question = OTHER_QUESTIONS[(max(state.turns, 1) - 1) % len(OTHER_QUESTIONS)]
+        else:
+            question = QUESTIONS.get(attribute, QUESTIONS["other"])
 
         # The agent deliberately returns a single candidate while the customer
         # still has something to disclose, so the sentence has to read correctly
