@@ -2,10 +2,10 @@
   {
     "dataset": "public",
     "style": "clean",
-    "score": 0.910201,
+    "score": 0.9735,
     "hit": 1.0,
-    "mrr": 0.738671,
-    "mttc": 1.57,
+    "mrr": 0.983333,
+    "mttc": 2.075,
     "scenario": {
       "boundary": 1.0,
       "browsing": 1.0,
@@ -16,38 +16,38 @@
   {
     "dataset": "public",
     "style": "natural",
-    "score": 0.807514,
-    "hit": 0.96,
-    "mrr": 0.578712,
-    "mttc": 3.305,
+    "score": 0.834983,
+    "hit": 0.935,
+    "mrr": 0.769944,
+    "mttc": 4.175,
     "scenario": {
       "boundary": 0.9,
-      "browsing": 0.9375,
+      "browsing": 0.8875,
       "buying": 0.975,
-      "intent_override": 1.0
+      "intent_override": 0.966667
     }
   },
   {
     "dataset": "public",
     "style": "terse",
-    "score": 0.833894,
-    "hit": 0.965,
-    "mrr": 0.585315,
-    "mttc": 2.21,
+    "score": 0.877319,
+    "hit": 0.925,
+    "mrr": 0.865062,
+    "mttc": 3.235,
     "scenario": {
       "boundary": 0.9,
-      "browsing": 0.95,
-      "buying": 0.9875,
-      "intent_override": 0.9667
+      "browsing": 0.9,
+      "buying": 0.95,
+      "intent_override": 0.933333
     }
   },
   {
     "dataset": "public",
     "style": "rambling",
-    "score": 0.886746,
+    "score": 0.934726,
     "hit": 0.99,
-    "mrr": 0.716821,
-    "mttc": 2.165,
+    "mrr": 0.924087,
+    "mttc": 2.875,
     "scenario": {
       "boundary": 1.0,
       "browsing": 0.9875,
@@ -58,55 +58,55 @@
   {
     "dataset": "public",
     "style": "typos",
-    "score": 0.837977,
-    "hit": 0.965,
-    "mrr": 0.607591,
-    "mttc": 2.34,
+    "score": 0.873735,
+    "hit": 0.93,
+    "mrr": 0.852117,
+    "mttc": 3.345,
     "scenario": {
-      "boundary": 0.9,
-      "browsing": 0.95,
-      "buying": 0.9875,
-      "intent_override": 0.9667
+      "boundary": 0.8,
+      "browsing": 0.9125,
+      "buying": 0.95,
+      "intent_override": 0.966667
     }
   },
   {
     "dataset": "public",
     "style": "indirect",
-    "score": 0.759334,
-    "hit": 0.895,
-    "mrr": 0.556446,
-    "mttc": 3.755,
+    "score": 0.795378,
+    "hit": 0.88,
+    "mrr": 0.753595,
+    "mttc": 4.535,
     "scenario": {
-      "boundary": 0.8,
-      "browsing": 0.8875,
-      "buying": 0.95,
+      "boundary": 0.9,
+      "browsing": 0.85,
+      "buying": 0.9375,
       "intent_override": 0.8
     }
   },
   {
     "dataset": "public",
     "style": "categories",
-    "score": 0.883563,
-    "hit": 0.99,
-    "mrr": 0.726544,
-    "mttc": 2.47,
+    "score": 0.928566,
+    "hit": 0.985,
+    "mrr": 0.923887,
+    "mttc": 3.055,
     "scenario": {
       "boundary": 1.0,
-      "browsing": 1.0,
+      "browsing": 0.9875,
       "buying": 0.9875,
-      "intent_override": 0.9667
+      "intent_override": 0.966667
     }
   },
   {
     "dataset": "public",
     "style": "lossy",
-    "score": 0.784783,
-    "hit": 0.935,
-    "mrr": 0.652944,
-    "mttc": 4.93,
+    "score": 0.805495,
+    "hit": 0.93,
+    "mrr": 0.761649,
+    "mttc": 5.4,
     "scenario": {
       "boundary": 1.0,
-      "browsing": 0.8875,
+      "browsing": 0.875,
       "buying": 0.9875,
       "intent_override": 0.9
     }

@@ -1,25 +1,61 @@
-"""Weight sweep. Builds the index once and re-scores in-process."""
-import itertools, json
+"""Weight sweep. Builds the index once and re-scores in-process.
+
+The knobs that matter live in ``TRACKS`` in ``src/routing.py``. The
+``W_PHRASE`` / ``W_BM25`` / ``W_POPULARITY`` constants in
+``src/shopping_agent.py`` are the pre-dual-track defaults and are no longer
+read by the ranker, so patching them sweeps nothing.
+"""
+import dataclasses
+
 from evaluator.local_evaluator import evaluate, load_jsonl, catalog_index
+import src.routing as rt
 import src.shopping_agent as sa
 from starter.agent import Agent
 
-samples = load_jsonl('data/public_set.jsonl')
-ids, cats, prods = catalog_index('data/catalog.jsonl')
-agent = Agent('data/catalog.jsonl')
+CATALOG = "data/catalog.jsonl"
+samples = load_jsonl("data/public_set.jsonl")
+ids, cats, prods = catalog_index(CATALOG)
+agent = Agent(CATALOG)
 
-grid = list(itertools.product(
-    [7.0, 12.0, 20.0, 32.0],   # W_PHRASE
-    [1.0, 2.0],                # W_BM25
-    [0.15, 0.55, 1.0],         # W_POPULARITY
-))
-best = None
-for wp, wb, wpop in grid:
-    sa.W_PHRASE, sa.W_BM25, sa.W_POPULARITY = wp, wb, wpop
-    r = evaluate(agent, samples, ids, cats, prods)
-    score = r['recommended_technical_score']
-    print(f"phrase={wp:<5} bm25={wb:<4} pop={wpop:<5} -> HR={r['hit_rate_at_10']:.3f} "
-          f"MRR={r['mrr']:.4f} MTTC={r['mttc']:.3f} score={score:.5f}", flush=True)
-    if best is None or score > best[0]:
-        best = (score, (wp, wb, wpop))
-print("BEST", best)
+BASE = {name: dataclasses.asdict(track) for name, track in rt.TRACKS.items()}
+
+
+def set_tracks(**overrides):
+    """Override a field on both tracks, or one track via a `buying_`/`browsing_` prefix."""
+    updated = {}
+    for name, fields in BASE.items():
+        fields = dict(fields)
+        for key, value in overrides.items():
+            if key.startswith(name + "_"):
+                fields[key[len(name) + 1:]] = value
+            elif not key.startswith(("buying_", "browsing_")):
+                fields[key] = value
+        updated[name] = rt.Track(**fields)
+    rt.TRACKS.clear()
+    rt.TRACKS.update(updated)
+
+
+def score(label, **overrides):
+    set_tracks(**overrides)
+    result = evaluate(agent, samples, ids, cats, prods)
+    print(f"{label:34s} HR={result['hit_rate_at_10']:.3f} MRR={result['mrr']:.4f} "
+          f"MTTC={result['mttc']:.3f} score={result['recommended_technical_score']:.5f}",
+          flush=True)
+    set_tracks()
+    return result["recommended_technical_score"]
+
+
+if __name__ == "__main__":
+    score("shipped")
+    for weight in (2.0, 4.0, 8.0, 12.0, 20.0):
+        score(f"w_popularity={weight}", w_popularity=weight)
+    for weight in (0.15, 0.3, 0.6, 1.0):
+        score(f"w_bm25={weight}", w_bm25=weight)
+    for weight in (3.0, 5.0, 10.0, 14.0):
+        score(f"w_phrase={weight}", w_phrase=weight)
+
+    # COMMIT_TURNS is the highest-leverage knob; see reports/commit_depth.json.
+    for depth in (0, 1, 2, 3, 4, 5):
+        sa.COMMIT_TURNS = depth
+        score(f"COMMIT_TURNS={depth}")
+    sa.COMMIT_TURNS = 3

@@ -10,7 +10,7 @@ usage is zero and model cost is zero.
 | | Hit Rate@10 | MRR | MTTC | Efficiency | TechnicalScore |
 |---|---|---|---|---|---|
 | Official weak BM25 baseline | 0.125 | 0.0680 | 9.81 | 0.119 | 0.1067 |
-| **This agent** | **1.000** | **0.7387** | **1.570** | 0.943 | **0.910201** |
+| **This agent** | **1.000** | **0.9833** | **2.075** | 0.893 | **0.973500** |
 
 Measured with the unmodified official evaluator on the 200 public sessions.
 Hit rate is 1.000 in all four scenario types. Runs are deterministic and
@@ -34,7 +34,7 @@ That single command is the one to run the agent in the official harness.
 No environment variables are required or read.
 
 ```bash
-python -m unittest discover -s tests   # 35 tests
+python -m unittest discover -s tests   # 37 tests
 python demo.py                         # walkthrough, one session per scenario
 python demo.py --metrics               # evaluator metrics table
 ```
@@ -117,6 +117,62 @@ cannot contain the target.
 Escalation uses only observable state. The agent is never told whether it was
 right, so the trigger cannot depend on that.
 
+### 5. How many products to return
+
+Returning ten candidates every turn looks free. It is not. The evaluator fixes
+the target's rank the first time it appears and then ends the session, so a
+low-ranked guess does not hedge — it *locks in* that rank and forfeits every
+later chance to do better.
+
+The protocol prices the trade explicitly. Costing one session out of two
+hundred:
+
+| | change | score |
+|---|---|---|
+| one extra turn | MTTC +1/200 | **−0.0001** |
+| rank 3 → rank 1 | MRR +0.667/200 | **+0.0010** |
+| losing a hit | Hit@10 −1/200 | **−0.0025** |
+
+Holding back is worth ten times what it costs; dropping a hit costs twenty-five
+times. So the agent narrows the list rather than withholding it, and stops
+narrowing well before the turn budget runs out: **while the customer still has
+something left to disclose it returns only its single best candidate and spends
+the turn asking. Once the disclosures are exhausted it returns the full ten and
+sweeps for coverage.**
+
+`COMMIT_TURNS = 3` is not fitted to the public set — it is the simulator's own
+disclosure schedule. An intent card carries at most four constraints
+(`hard[:2]` plus `soft[2:4]`), a reply releases at most two, so turns 2 and 3
+carry the last of them and nothing new arrives afterwards. An intent override
+lands on turn 3 or 4, inside the same window.
+
+Measured on all three pools (`reports/commit_depth.json`):
+
+| `COMMIT_TURNS` | public 200 | matched 800 | long-tail 800 |
+|---|---|---|---|
+| 0 (return ten always) | 0.9102 | 0.8849 | 0.8729 |
+| 1 | 0.9567 | 0.9320 | 0.8949 |
+| 2 | 0.9699 | 0.9416 | **0.9192** |
+| **3 (shipped)** | **0.9735** | **0.9455** | 0.9121 |
+| 4 | 0.9643 | 0.9427 | 0.8977 |
+| 5 | 0.9610 | 0.9416 | 0.8906 |
+
+Past 3 the curve turns over, and it turns over on Hit@10: committing for four
+turns sweeps 73 distinct products instead of 100, and public Hit@10 falls from
+1.000 to 0.990 — which at −0.0025 a session outruns the MRR still on offer.
+
+Depth 2 is the conservative alternative. It wins on the long-tail pool
+(0.9192 vs 0.9121) and holds Hit@10 higher there (0.970 vs 0.956); depth 3 wins
+on the public set and on the matched pool, which is the one built to reproduce
+the private set's purchase-popularity profile. We ship 3 and left the constant
+in one place so the choice is one edit.
+
+**A confidence gate was tried and rejected.** Committing only when the top
+candidate's score margin cleared a threshold was worse at every threshold
+tested (τ=0.02 → 0.9471, τ=0.05 → 0.9228, τ=0.10 → 0.9136, against 0.9735
+unconditional). The margin does not predict correctness here, and gating on it
+merely reinstates the ten-item list on the turns that most need narrowing.
+
 ### Components
 
 | File | Responsibility |
@@ -154,27 +210,31 @@ closest available proxy for the private set. The third pool samples the catalog
 uniformly, making it a deliberate adversarial test of whether the popularity
 prior is load-bearing.
 
-| templated wording | TechnicalScore |
-|---|---|
-| public 200 | 0.9102 |
-| matched 800 (unseen products) | 0.8849 |
-| long-tail 800 (adversarial) | 0.8729 |
+| templated wording | TechnicalScore | Hit@10 |
+|---|---|---|
+| public 200 | 0.9735 | 1.000 |
+| matched 800 (unseen products) | 0.9455 | 0.978 |
+| long-tail 800 (adversarial) | 0.9121 | 0.956 |
 
 ### Seven perturbation styles
 
 Generated blind by a separate model that was never shown the parser, then frozen
 to disk so every run is offline and reproducible.
 
-| Style (public 200) | Inherited baseline | This agent |
-|---|---|---|
-| clean (official wording) | 0.9068 | **0.9102** |
-| natural | 0.4967 | **0.8075** |
-| terse | 0.4520 | **0.8339** |
-| typos | 0.4520 | **0.8380** |
-| indirect | 0.4819 | **0.7593** |
-| rambling | 0.8815 | **0.8867** |
-| categories | 0.8832 | 0.8836 |
-| *lossy (information removed)* | *0.8101* | *0.7848* |
+| Style | Inherited baseline | Ten-item list | **This agent** | matched 800 |
+|---|---|---|---|---|
+| clean (official wording) | 0.9068 | 0.9102 | **0.9735** | 0.9455 |
+| natural | 0.4967 | 0.8075 | **0.8350** | 0.9304 |
+| terse | 0.4520 | 0.8339 | **0.8773** | 0.9445 |
+| typos | 0.4520 | 0.8380 | **0.8737** | 0.9377 |
+| indirect | 0.4819 | 0.7593 | **0.7954** | 0.9266 |
+| rambling | 0.8815 | 0.8867 | **0.9347** | 0.9401 |
+| categories | 0.8832 | 0.8836 | **0.9286** | 0.9363 |
+| *lossy (information removed)* | *0.8101* | *0.7848* | ***0.8055*** | *0.9248* |
+
+Every style improves under the commitment policy, on both pools — sixteen of
+sixteen, by +0.021 to +0.063. The public-set styles are the harder test: they
+rewrite ~92% of messages, and the reworded columns still carry the gain.
 
 On terse and typos the inherited version's hit rate was **0.535** — it missed
 the target entirely in nearly half of all sessions, because a message its
@@ -199,11 +259,14 @@ python heldout_eval.py --rewrites reports/heldout_natural.json \
 | Model API | None |
 | Token usage | **0** prompt, **0** completion |
 | Estimated model cost | **$0.00** |
-| Per-turn latency | median **8.8 ms**, p95 61 ms, p99 79 ms, max 128 ms |
-| One-time index build | 8.2 s at start-up |
-| Full 200-session run | 6.7 s |
+| Per-turn latency | median **12.8 ms**, p95 97 ms, p99 128 ms, max 168 ms |
+| One-time index build | 12.1 s at start-up |
+| Full 200-session run | 13.4 s |
 
-Measured on the public set; see `reports/latency.json`. The agent reads no
+Measured on the public set; see `reports/latency.json`. Absolute timings are
+hardware-dependent — this run is on a machine that builds the index in 12.1 s
+where an earlier recorded run took 8.2 s, so roughly 1.5x slower. Zero tokens,
+zero cost and no network are properties of the agent, not of the machine. The agent reads no
 environment variable and opens no socket, so it runs unchanged under the CPU,
 memory, timeout and network restrictions the organizer reserves the right to
 impose (`docs/submission_rules.md`).
@@ -251,21 +314,43 @@ all 200 sessions and the preference tags are generic.
 
 ## Limitations, and what we would do next
 
-**MRR is where the remaining score is, and it is nearly information-bound.**
-Hit@10 is saturated at 1.000, so the score decomposes as 0.084 of headroom in
-MRR and 0.012 in efficiency — 87% of what is left is MRR. The evaluator stops the
-turn loop the moment the target enters the top ten, so a target's rank is fixed
-at first appearance and can never be improved later. MRR is therefore decided by
-turn-1 ranking, on a browsing session where the customer has named only a
-category. Rank at conversion is currently 57.5% at rank 1; reaching MRR 0.85
-would need ~78%. That is guessing the exact purchased item first out of ~180
-category peers from one sentence.
+**Efficiency is now the binding constraint, and it has a hard floor.** With
+Hit@10 at 1.000 and 195 of 200 conversions landing at rank 1, only 0.005 of
+score remains in MRR against 0.014 in efficiency. MTTC is 2.075 and cannot go
+below **1.390**: an intent-override session is forbidden by the protocol from
+converting before its override lands on turn 3 or 4, which alone puts a floor
+under the mean. Total remaining headroom on the public set is 0.019, and most of
+it is unreachable.
 
-**Weights are tuned on 200 sessions.** The matched-pool result (0.8849) is our
-honest estimate for the private set, not the public 0.9102.
+What is left is turn-1 precision: 75 of 200 sessions convert on the opening
+turn, and each additional one is worth about 0.0001. Since the agent commits to
+a single pick, "improve the ranking" and "convert sooner" are now the same
+problem.
+
+**The weights are at a local optimum and were re-checked under the new
+objective.** Committing to one pick changes the target from *"target in the top
+ten"* to *"target at rank 1"*, so the blend was re-swept afterwards:
+`w_popularity` over 2–20 and `w_bm25` over 0.15–1.0 move the public score by at
+most ±0.001 and no setting improves both the public and matched pools. The
+shipped values stand.
+
+Note that `tune.py` sweeps `W_PHRASE`/`W_BM25`/`W_POPULARITY` in
+`src/shopping_agent.py`, which the dual-track refactor made inert — the live
+weights live in `TRACKS` in `src/routing.py`. It has been repointed at the real
+knobs; the constants it used to sweep are kept only as documentation of the
+single-track defaults.
+
+**Weights are tuned on 200 sessions.** The matched-pool result (0.9455) is our
+honest estimate for the private set, not the public 0.9735.
 
 **Category routing remains the largest single failure mode.** The perturbations
 that cost real score all attack the category label.
+
+**Hit@10 is the thing to protect.** It is 1.000 on the public set but 0.978 on
+the matched pool and 0.956 on the long-tail pool, and committing to one pick is
+what costs it: three committed turns sweep 73 distinct products instead of 100.
+Every remaining risk in this design is a Hit@10 risk, priced at −0.0025 a
+session.
 
 **Boundary is the weakest scenario on hard targets** (0.75 hit rate on the
 long-tail pool). It is a retrieval problem on the hardest slice — median pool
@@ -283,9 +368,9 @@ fitted on the set they are reported on.
 ## Reproducing every number in this README
 
 ```bash
-python -m evaluator.local_evaluator                     # 0.910201
+python -m evaluator.local_evaluator                     # 0.973500
 python demo.py --metrics                                # same, with breakdown
-python -m unittest discover -s tests                    # 35 tests
+python -m unittest discover -s tests                    # 37 tests
 
 # perturbation styles (natural | terse | rambling | typos |
 #                      indirect | categories | lossy)

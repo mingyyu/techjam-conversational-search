@@ -4,8 +4,8 @@ A multi-turn shopping agent that finds a customer's intended product in a frozen
 50,000-item Amazon catalog within ten turns — running entirely on the Python
 standard library, with **zero API calls, zero tokens, and zero cost**.
 
-**TechnicalScore 0.910201** on the official evaluator (Hit Rate@10 **1.000**,
-MRR 0.739, MTTC 1.57), against a published baseline of 0.107.
+**TechnicalScore 0.973500** on the official evaluator (Hit Rate@10 **1.000**,
+MRR 0.983, MTTC 2.08), against a published baseline of 0.107.
 
 ---
 
@@ -72,12 +72,12 @@ That harness found things the score alone never would:
 
 | Style (public 200) | Inherited | Ours |
 |---|---|---|
-| official wording | 0.9068 | **0.9102** |
-| natural | 0.4967 | **0.8075** |
-| terse | 0.4520 | **0.8339** |
-| typos | 0.4520 | **0.8380** |
-| indirect | 0.4819 | **0.7593** |
-| rambling | 0.8815 | **0.8867** |
+| official wording | 0.9068 | **0.9735** |
+| natural | 0.4967 | **0.8350** |
+| terse | 0.4520 | **0.8773** |
+| typos | 0.4520 | **0.8737** |
+| indirect | 0.4819 | **0.7954** |
+| rambling | 0.8815 | **0.9347** |
 
 ---
 
@@ -91,17 +91,33 @@ from ~9 ms to ~1.3 s, and with the endpoint unreachable every message burned the
 full timeout — a projected 13+ hours for 800 sessions. A solution that cannot run
 in the grading environment scores zero, whatever it scores in ours.
 
-**Most of the remaining headroom is not reachable.** Hit@10 is saturated at
-1.000, so 87% of what is left sits in MRR. The evaluator stops the turn loop the
-instant the target enters the top ten, which means a product's rank is fixed at
-first appearance and can never be improved later. MRR is therefore decided by
-turn-1 ranking, on a browsing session where the customer has named only a
-category — guessing the exact purchased item first out of ~180 peers from one
-sentence. Knowing that stopped us burning time on a wall.
+**How many products to return is a decision, not a formality — and it was worth
+more than any weight we tuned.** The evaluator stops the turn loop the instant
+the target enters the top ten, so a product's rank is fixed at first appearance
+and can never be improved later. That makes a low-ranked guess the opposite of a
+hedge: it locks the rank in. Priced against one session in two hundred, an extra
+turn costs 0.0001 of score, lifting a session from rank 3 to rank 1 gains
+0.0010, and losing a hit costs 0.0025. So while the customer still has something
+to disclose the agent returns only its single best candidate and spends the turn
+asking; once they run dry it returns the full ten and sweeps. Public 0.9102 →
+**0.9735**, Hit@10 unchanged at 1.000, and every one of the sixteen
+pool-by-wording combinations we measured improved.
 
-**Three ideas we built, measured, and switched off:** cross-category browsing
-pools, a corpus-trained LSA semantic encoder, and a raised personalisation
-weight. All are documented with their numbers. A negative result measured
+The commitment window is three turns because that is the *simulator's* schedule,
+not a number we fitted: an intent card holds at most four constraints and a
+reply releases two, so nothing new arrives after turn 3. Past that the curve
+turns over on Hit@10, which is exactly where the pricing says it should.
+
+**Most of the remaining headroom is genuinely unreachable.** With Hit@10 at
+1.000 and 195 of 200 conversions at rank 1, 0.019 of score is left and MTTC
+cannot fall below 1.390 — an intent-override session is forbidden from
+converting before its override lands on turn 3 or 4. Knowing that stopped us
+burning time on a wall.
+
+**Four ideas we built, measured, and switched off:** cross-category browsing
+pools, a corpus-trained LSA semantic encoder, a raised personalisation weight,
+and a confidence gate on the commitment policy (committing only when the top
+candidate's score margin cleared a threshold — worse at every threshold tested). All are documented with their numbers. A negative result measured
 properly is still a result.
 
 ---

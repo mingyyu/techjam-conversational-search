@@ -1,19 +1,21 @@
 {
-  "index_build_s": 8.17,
-  "catalog_parse_s": 0.55,
-  "turns_measured": 314,
+  "index_build_s": 12.06,
+  "catalog_parse_s": 0.88,
+  "turns_measured": 415,
   "per_turn_ms": {
-    "mean": 21.0,
-    "median": 8.8,
-    "p95": 61.2,
-    "p99": 78.6,
-    "max": 127.5
+    "mean": 32.0,
+    "median": 12.8,
+    "p95": 96.6,
+    "p99": 127.8,
+    "max": 168.1
   },
-  "full_200_session_run_s": 6.7,
+  "full_200_session_run_s": 13.4,
   "tokens": {
     "prompt_tokens": 0,
     "completion_tokens": 0,
     "total_tokens": 0
   },
-  "score": 0.910201
+  "score": 0.9735,
+  "note": "Measured on the submission container. Absolute timings are hardware-dependent: this machine builds the index in 12.1s where an earlier recorded run took 8.2s, so it is roughly 1.5x slower. Zero tokens, zero cost and no network are properties of the agent, not of the machine.",
+  "commit_turns": 3
 }
