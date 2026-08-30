@@ -1,0 +1,95 @@
+{
+  "note": "Overfitting audit. Jitter = every fitted numeric constant perturbed by a uniform random factor simultaneously; structural = the opening message degraded so the agent no longer receives the catalog's own category label.",
+  "shipped": {
+    "public": 0.9735,
+    "matched": 0.945478
+  },
+  "parameter_jitter": {
+    "constants_perturbed": [
+      "w_phrase",
+      "w_bm25",
+      "w_popularity",
+      "w_profile",
+      "WEIGHT_HARD",
+      "WEIGHT_ANSWER",
+      "WEIGHT_SOFT",
+      "OVER_GENERAL_POOL",
+      "STALL_LIMIT",
+      "EXHAUSTION_RATIO",
+      "BROADEN_POOL",
+      "POOL_TRUST_LIMIT",
+      "STORE_CAP"
+    ],
+    "plus_minus_25pct": {
+      "draws": 8,
+      "public": {
+        "min": 0.97083,
+        "median": 0.9723,
+        "max": 0.97264,
+        "hit_rate_min": 1.0
+      },
+      "matched": {
+        "min": 0.9441,
+        "median": 0.9452,
+        "max": 0.94555
+      }
+    },
+    "plus_minus_50pct": {
+      "draws": 8,
+      "public": {
+        "min": 0.9527,
+        "median": 0.9724,
+        "max": 0.97398,
+        "hit_rate_min": 0.985
+      },
+      "matched": {
+        "min": 0.93429,
+        "median": 0.94533,
+        "max": 0.94614
+      }
+    }
+  },
+  "structural_stress_public_200": [
+    {
+      "case": "shipped (category named verbatim)",
+      "score": 0.9735,
+      "hit": 1.0,
+      "mrr": 0.9833,
+      "mttc": 2.075
+    },
+    {
+      "case": "category replaced with 'something'",
+      "score": 0.92642,
+      "hit": 0.985,
+      "mrr": 0.9057,
+      "mttc": 2.89
+    },
+    {
+      "case": "category replaced with 'a gift for someone'",
+      "score": 0.92655,
+      "hit": 0.98,
+      "mrr": 0.9172,
+      "mttc": 2.93
+    },
+    {
+      "case": "category misspelled",
+      "score": 0.96304,
+      "hit": 0.995,
+      "mrr": 0.9655,
+      "mttc": 2.205
+    },
+    {
+      "case": "category kept, disclosed requirement deleted",
+      "score": 0.97237,
+      "hit": 1.0,
+      "mrr": 0.9846,
+      "mttc": 2.15
+    }
+  ],
+  "output_contract_fuzz": {
+    "cases": 85,
+    "violations": 0,
+    "calls_over_2s": 0,
+    "covers": "empty/whitespace, 20k chars, control bytes, emoji, CJK, format strings, SQL and HTML payloads, truncated templates, turn numbers outside 1-10, respond() without reset()"
+  }
+}

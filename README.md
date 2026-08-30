@@ -249,6 +249,52 @@ python heldout_eval.py --rewrites reports/heldout_natural.json \
                        --dataset data/matched_sessions.jsonl
 ```
 
+### Are the constants overfitted to the public 200?
+
+About a dozen numbers were fitted on 200 sessions, which is few sessions for
+that many knobs. The test is whether the fit is *sharp*: a parameter set tuned
+onto a peak collapses when you push it off, one sitting on a plateau does not.
+Every fitted constant was perturbed simultaneously by a uniform random factor
+(`reports/robustness_audit.json`):
+
+| jitter | public: min / median / max | matched: min / median / max |
+|---|---|---|
+| **±25%**, 8 draws | 0.9708 / 0.9723 / 0.9726 | 0.9441 / 0.9452 / 0.9456 |
+| **±50%**, 8 draws | 0.9527 / 0.9724 / 0.9740 | 0.9343 / 0.9453 / 0.9461 |
+
+Shipped is 0.9735 / 0.9455. Quartering or doubling everything at once costs
+0.021 in the worst of sixteen draws and about 0.001 typically; Hit@10 stays at
+1.000 in every ±25% draw. One ±50% draw scores *above* shipped, so the shipped
+point is not even a sharp local peak. The numbers are not load-bearing.
+
+### What happens when the structure changes, not the numbers
+
+The real dependency is not a weight, it is the assumption that the opening
+message hands over the catalog's own category label. Degrading exactly that:
+
+| opening message | score | Hit@10 |
+|---|---|---|
+| shipped (category named verbatim) | 0.9735 | 1.000 |
+| category misspelled | 0.9630 | 0.995 |
+| category replaced with "something" | 0.9264 | 0.985 |
+| category replaced with "a gift for someone" | 0.9266 | 0.980 |
+| category kept, disclosed requirement deleted | 0.9724 | 1.000 |
+
+Two things worth reading off this table. Deleting the category costs 0.047 and
+Hit@10 only falls to 0.985 — the salvage path and the whole-catalog BM25 union
+catch it, so the failure is graceful rather than a cliff. And deleting the
+*requirement* costs almost nothing (0.001): on the opening turn the category is
+doing nearly all of the work, and the stated constraint very little.
+
+### The output contract under hostile input
+
+A miss costs ~0.005, and the specification counts exceptions, invalid output and
+timeouts as misses. 85 adversarial messages — empty and whitespace-only, 20,000
+characters, control bytes, emoji, CJK, format-string, SQL and HTML payloads,
+truncated templates, turn numbers outside 1–10, and `respond()` before any
+`reset()` — produce **zero contract violations and no call over two seconds**.
+Frozen as `tests/test_fuzz.py`, which needs no catalog download.
+
 ---
 
 ## Disclosure: latency, tokens, and cost
