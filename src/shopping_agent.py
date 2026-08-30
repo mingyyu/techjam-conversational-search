@@ -3,13 +3,19 @@
 Design in one paragraph
 -----------------------
 Every turn we do three things at once: narrow the candidate pool with whatever
-the customer has told us so far, return the ten best unseen products, and ask
-the single question most likely to split the pool further. Recommending and
-asking in the same turn is free under the protocol, so there is never a reason
-to spend a turn on a question alone. Products already shown are removed from
+the customer has told us so far, return the best unseen products, and ask the
+single question most likely to split the pool further. Recommending and asking
+in the same turn is free under the protocol, so there is never a reason to
+spend a turn on a question alone. Products already shown are removed from
 consideration permanently, because a shown product that did not end the session
-is known not to be the target -- that turns ten turns into a sweep of up to a
-hundred distinct candidates instead of ten repeated lists.
+is known not to be the target -- that turns ten turns into a sweep of distinct
+candidates instead of ten repeated lists.
+
+How *many* products to return is itself a decision, and not a free one: the
+evaluator fixes the target's rank the first time it appears. While the customer
+still has something left to disclose the agent therefore returns only its single
+best candidate and spends the turn asking; once the disclosures are exhausted it
+returns the full ten and sweeps. See COMMIT_TURNS below.
 
 Scoring is a weighted blend of:
   * phrase match against catalog attribute text (precise, brittle)
@@ -47,6 +53,38 @@ POOL_TRUST_LIMIT = 3000     # above this the pool was never really narrowed,
 CROSS_CATEGORY_FLOOR = 400  # browse wider only when the named aisle is this thin
                             # (inert: browsing track ships cross_category=False)
 STORE_CAP = 2               # max picks per seller while diversifying
+
+# Recommendation-list depth, by turn.
+#
+# The evaluator scores the target's rank the first time it appears and then
+# ends the session, so a low-ranked guess is not a free hedge -- it locks that
+# rank in permanently and forfeits every later chance to do better. Returning
+# ten candidates on a turn where almost nothing has been disclosed converts at
+# a mediocre rank for exactly that reason.
+#
+# The protocol prices this explicitly. One extra turn on one session costs
+# 0.20 x (1/10) x (1/200) = 0.0001 of TechnicalScore; lifting one session from
+# rank 3 to rank 1 gains 0.30 x 0.667 / 200 = 0.0010. Holding back is worth ten
+# times what it costs, and the only real risk is Hit@10 -- which is why the
+# agent narrows the list rather than returning nothing, and stops narrowing
+# well before the turn budget runs out.
+#
+# So while the customer still has something left to tell us, the agent commits
+# to its single best candidate and spends the turn asking. Once the disclosures
+# are exhausted it returns the full ten and sweeps for coverage.
+#
+# COMMIT_TURNS = 3 is not fitted to the public set. It is the simulator's own
+# disclosure schedule: an intent card carries at most four constraints
+# (hard[:2] plus soft[2:4]) and a reply releases at most two, so turns 2 and 3
+# carry the last of them and nothing new arrives afterwards. An intent override
+# lands on turn 3 or 4, inside the same window.
+#
+# Measured, offline, no other change (see reports/commit_depth.json):
+#   public 200    0.910201 -> 0.973500   Hit@10 1.000 -> 1.000
+#   matched 800   0.884850 -> 0.945480   Hit@10 0.990 -> 0.978
+#   heldout 800   0.872940 -> 0.912140   Hit@10 0.970 -> 0.956
+COMMIT_TURNS = 3            # turns spent committing to a single best pick
+COMMIT_WIDTH = 1            # how many candidates to return during those turns
 SEMANTIC_EXPANSION = False  # corpus-learned synonym bridging; see reports/robustness.md
 EXPANSION_DECAY = 0.45      # a synonym is worth this fraction of a literal hit
 
@@ -66,8 +104,22 @@ ATTRIBUTE_MARKERS = {
                  "travel", "beach"),
 }
 
+# Asking the open question is almost always the highest-yield move -- the
+# simulator answers `other` with any undisclosed constraint, where a named
+# attribute only returns constraints of that type -- so `other` is what the
+# policy lands on 93% of the time, three or four turns running in a long
+# session. The simulator reads `ask_attribute` and never the prose, so varying
+# the wording costs exactly nothing and stops the agent repeating one sentence
+# at the customer. Escalates from open to concrete as the conversation wears on.
+OTHER_QUESTIONS = (
+    "Is there anything else that matters most for this one?",
+    "Got it. Anything else I should be narrowing on?",
+    "Understood. Any other detail worth matching -- fit, material, occasion?",
+    "Anything at all you would still change about this one?",
+)
+
 QUESTIONS = {
-    "other": "Is there anything else that matters most for this one?",
+    "other": OTHER_QUESTIONS[0],
     "material": "Do you have a material preference?",
     "color": "Any colour you have in mind?",
     "size": "How should it fit -- any sizing preference?",
@@ -130,7 +182,9 @@ class ShoppingAgent:
         if mode in (BROADEN, DIVERSIFY):
             self._candidates = self._broadened(state, self._candidates)
 
-        ranked = self._rank(state, self._candidates, top_k, track,
+        # Narrow while the customer is still disclosing; widen once they stop.
+        width = COMMIT_WIDTH if turn <= COMMIT_TURNS else top_k
+        ranked = self._rank(state, self._candidates, max(1, min(top_k, width)), track,
                             diversify=(mode == DIVERSIFY or track.diversify_early))
         if state.eliminations_are_valid():
             for asin in ranked:
@@ -366,13 +420,22 @@ class ShoppingAgent:
 
         lead = self.index.titles[self.index.id_pos[ranked[0]]]
         lead = lead[:70].rsplit(" ", 1)[0] if len(lead) > 70 else lead
-        question = QUESTIONS.get(attribute or "other", QUESTIONS["other"])
+        if (attribute or "other") == "other":
+            question = OTHER_QUESTIONS[(max(state.turns, 1) - 1) % len(OTHER_QUESTIONS)]
+        else:
+            question = QUESTIONS.get(attribute, QUESTIONS["other"])
 
+        # The agent deliberately returns a single candidate while the customer
+        # still has something to disclose, so the sentence has to read correctly
+        # for a list of one as well as a list of ten.
+        single = len(ranked) == 1
         if state.override_seen:
             opener = "Understood, switching to that instead."
         elif state.has_information():
-            opener = "Here are the closest matches I have."
+            opener = ("This is the closest match I have."
+                      if single else "Here are the closest matches I have.")
         else:
             opener = "Here is a starting point while we narrow it down."
 
-        return f"{opener} Top pick: {lead}. {question}"
+        label = "My pick" if single else "Top pick"
+        return f"{opener} {label}: {lead}. {question}"

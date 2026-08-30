@@ -1,0 +1,146 @@
+[
+  {
+    "pool": "public",
+    "commit_turns": 0,
+    "score": 0.910201,
+    "hit_rate_at_10": 1.0,
+    "mrr": 0.738671,
+    "mttc": 1.57
+  },
+  {
+    "pool": "public",
+    "commit_turns": 1,
+    "score": 0.956693,
+    "hit_rate_at_10": 1.0,
+    "mrr": 0.915978,
+    "mttc": 1.905
+  },
+  {
+    "pool": "public",
+    "commit_turns": 2,
+    "score": 0.969864,
+    "hit_rate_at_10": 1.0,
+    "mrr": 0.967881,
+    "mttc": 2.025
+  },
+  {
+    "pool": "public",
+    "commit_turns": 3,
+    "score": 0.9735,
+    "hit_rate_at_10": 1.0,
+    "mrr": 0.983333,
+    "mttc": 2.075
+  },
+  {
+    "pool": "public",
+    "commit_turns": 4,
+    "score": 0.964289,
+    "hit_rate_at_10": 0.99,
+    "mrr": 0.974964,
+    "mttc": 2.16
+  },
+  {
+    "pool": "public",
+    "commit_turns": 5,
+    "score": 0.961,
+    "hit_rate_at_10": 0.985,
+    "mrr": 0.975,
+    "mttc": 2.2
+  },
+  {
+    "pool": "matched",
+    "commit_turns": 0,
+    "score": 0.884851,
+    "hit_rate_at_10": 0.99,
+    "mrr": 0.68592,
+    "mttc": 1.79625
+  },
+  {
+    "pool": "matched",
+    "commit_turns": 1,
+    "score": 0.932038,
+    "hit_rate_at_10": 0.985,
+    "mrr": 0.877126,
+    "mttc": 2.18
+  },
+  {
+    "pool": "matched",
+    "commit_turns": 2,
+    "score": 0.941577,
+    "hit_rate_at_10": 0.98,
+    "mrr": 0.928505,
+    "mttc": 2.34875
+  },
+  {
+    "pool": "matched",
+    "commit_turns": 3,
+    "score": 0.945478,
+    "hit_rate_at_10": 0.9775,
+    "mrr": 0.951925,
+    "mttc": 2.4425
+  },
+  {
+    "pool": "matched",
+    "commit_turns": 4,
+    "score": 0.942706,
+    "hit_rate_at_10": 0.97375,
+    "mrr": 0.954687,
+    "mttc": 2.52875
+  },
+  {
+    "pool": "matched",
+    "commit_turns": 5,
+    "score": 0.941645,
+    "hit_rate_at_10": 0.97375,
+    "mrr": 0.952899,
+    "mttc": 2.555
+  },
+  {
+    "pool": "heldout",
+    "commit_turns": 0,
+    "score": 0.87294,
+    "hit_rate_at_10": 0.97,
+    "mrr": 0.720384,
+    "mttc": 2.40875
+  },
+  {
+    "pool": "heldout",
+    "commit_turns": 1,
+    "score": 0.894863,
+    "hit_rate_at_10": 0.97125,
+    "mrr": 0.80096,
+    "mttc": 2.5525
+  },
+  {
+    "pool": "heldout",
+    "commit_turns": 2,
+    "score": 0.919218,
+    "hit_rate_at_10": 0.97,
+    "mrr": 0.898645,
+    "mttc": 2.76875
+  },
+  {
+    "pool": "heldout",
+    "commit_turns": 3,
+    "score": 0.912142,
+    "hit_rate_at_10": 0.95625,
+    "mrr": 0.908806,
+    "mttc": 2.93125
+  },
+  {
+    "pool": "heldout",
+    "commit_turns": 4,
+    "score": 0.897692,
+    "hit_rate_at_10": 0.935,
+    "mrr": 0.909474,
+    "mttc": 3.1325
+  },
+  {
+    "pool": "heldout",
+    "commit_turns": 5,
+    "score": 0.890601,
+    "hit_rate_at_10": 0.92625,
+    "mrr": 0.905338,
+    "mttc": 3.20625
+  }
+]

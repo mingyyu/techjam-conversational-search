@@ -163,10 +163,28 @@ class TestOutputContract(unittest.TestCase):
             self.assertFalse(seen & set(ids), "product repeated across turns")
             seen.update(ids)
 
-    def test_always_returns_a_full_list_even_with_no_information(self):
+    def test_commits_to_one_pick_while_the_customer_is_still_disclosing(self):
+        from src.shopping_agent import COMMIT_TURNS, COMMIT_WIDTH
         self.agent.reset("s3", {})
-        out = self.agent.respond("s3", "", 1, 10)
+        for turn in range(1, COMMIT_TURNS + 1):
+            out = self.agent.respond("s3", "", turn, 10)
+            # Never empty: a turn that recommends nothing cannot convert.
+            self.assertEqual(len(out["recommendations"]), COMMIT_WIDTH)
+
+    def test_returns_a_full_list_once_disclosures_are_exhausted(self):
+        from src.shopping_agent import COMMIT_TURNS
+        self.agent.reset("s4", {})
+        for turn in range(1, COMMIT_TURNS + 1):
+            self.agent.respond("s4", "", turn, 10)
+        out = self.agent.respond("s4", "", COMMIT_TURNS + 1, 10)
         self.assertEqual(len(out["recommendations"]), 10)
+
+    def test_never_exceeds_the_requested_top_k(self):
+        self.agent.reset("s5", {})
+        for turn in range(1, 6):
+            out = self.agent.respond("s5", "", turn, 10)
+            self.assertLessEqual(len(out["recommendations"]), 10)
+            self.assertGreaterEqual(len(out["recommendations"]), 1)
 
     def test_unknown_session_id_is_handled_without_raising(self):
         out = self.agent.respond("never-seen", "I'm looking for Men Shirts.", 1, 10)

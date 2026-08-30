@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import textwrap
 
 from evaluator.local_evaluator import (
     MAX_TURNS, TOP_K, catalog_index, coarse_category, customer_reply, evaluate,
@@ -123,7 +124,11 @@ def run_session(agent, sample, ids, cats, products, verbose=True):
             spent = (", ".join(sorted(st.dead_attributes))
                      if st.dead_attributes else "none yet")
             print("  asks        " + asked + "   (exhausted: " + spent + ")")
-            print("  AGENT       " + safe(response.get("message", ""))[:70])
+            # Wrap rather than truncate: the question the agent asks lives at
+            # the end of the message, and cutting it off hides the fact that
+            # every single turn asks one.
+            for i, line in enumerate(textwrap.wrap(safe(response.get("message", "")), 62)):
+                print(("  AGENT       " if i == 0 else "              ") + line)
             for i, asin in enumerate(ranked[:5], 1):
                 mark = "   <== TARGET" if asin == target else ""
                 title = safe(products.get(asin, {}).get("title", ""))[:40]
