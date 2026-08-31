@@ -4,9 +4,9 @@ A multi-turn shopping agent that finds a customer's intended product in a frozen
 50,000-item Amazon catalog within ten turns — running entirely on the Python
 standard library, with **zero API calls, zero tokens, and zero cost**.
 
-**TechnicalScore 0.974950** on the official evaluator (Hit Rate@10 **1.000**,
-MRR 0.9858, MTTC 2.040), against a published baseline of 0.1067 — a 9.1×
-improvement. Hit Rate@10 is 1.000 in all four scenario types, and 196 of the
+**TechnicalScore 0.977275** on the official evaluator (Hit Rate@10 **1.000**,
+MRR 0.99125, MTTC 2.005), against a published baseline of 0.1067 — a 9.2×
+improvement. Hit Rate@10 is 1.000 in all four scenario types, and 197 of the
 200 conversions land at rank 1.
 
 ---
@@ -65,11 +65,11 @@ load-bearing.
 
 | Pool (official wording) | TechnicalScore | Hit@10 |
 |---|---|---|
-| public 200 (the set we can see) | 0.974950 | 1.000 |
+| public 200 (the set we can see) | 0.977275 | 1.000 |
 | **matched 800 — unseen products, purchase-like popularity** | **0.957786** | 0.989 |
 | long-tail 800 — uniform sample, adversarial | 0.925450 | 0.968 |
 
-**0.9578 is our honest estimate for the private set, not the public 0.9749.**
+**0.9578 is our honest estimate for the private set, not the public 0.9773.**
 And if the private targets turned out to be long-tail after all — which the
 specification makes unlikely, since it anchors them on real purchase records —
 we would give up a further 0.032, with Hit@10 still at 0.968. There is no cliff
@@ -94,7 +94,7 @@ That harness found things the score alone never would:
 
 | Style (public 200) | Inherited | Ours |
 |---|---|---|
-| official wording | 0.9068 | **0.974950** |
+| official wording | 0.9068 | **0.977275** |
 | rambling | 0.8815 | **0.936576** |
 | renamed categories | 0.8832 | **0.931116** |
 | terse | 0.4520 | **0.890260** |
@@ -128,7 +128,7 @@ turn costs 0.0001 of score, lifting a session from rank 3 to rank 1 gains
 0.0010, and losing a hit costs 0.0025. So while the customer still has something
 to disclose the agent returns only its single best candidate and spends the turn
 asking; once they run dry it returns the full ten and sweeps. Public 0.9095 →
-**0.9749** and matched-800 0.8901 → **0.9578**, Hit@10 unchanged at 1.000, and
+**0.9773** and matched-800 0.8901 → **0.9578**, Hit@10 unchanged at 1.000, and
 every one of the sixteen pool-by-wording combinations we measured improved.
 
 The commitment window is three turns because that is the *simulator's* schedule,
@@ -137,7 +137,7 @@ reply releases two, so nothing new arrives after turn 3. Past that the curve
 turns over on Hit@10, which is exactly where the pricing says it should.
 
 **Most of the remaining headroom is genuinely unreachable.** With Hit@10 at
-1.000 and 196 of 200 conversions at rank 1, 0.019 of score is left and MTTC
+1.000 and 197 of 200 conversions at rank 1, 0.019 of score is left and MTTC
 cannot fall below 1.390 — an intent-override session is forbidden from
 converting before its override lands on turn 3 or 4. Knowing that stopped us
 burning time on a wall.
