@@ -25,3 +25,6 @@ results.json
 # DATA_ATTRIBUTION.md on following the source dataset's terms.
 /catalog.jsonl.gz
 /SHA256SUMS
+
+.codex*
+.tmp*

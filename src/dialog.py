@@ -30,6 +30,55 @@ NO_PREFERENCE_RE = re.compile(
 
 OVERRIDE_MARKERS = ("ignore my earlier", "actually,", "instead of")
 
+# Semicolons the simulator inserted, versus semicolons the catalog already had.
+#
+# A disclosure reply is built as `"; ".join(matches)` over at most two intent
+# card fields, so at most one semicolon in it is a field boundary. But a single
+# catalog field routinely contains its own -- "solid colors: 100% cotton;
+# heather grey: 90% cotton, 10% polyester; ..." is one `details` value, and
+# 11,138 of the 50,000 catalog products have at least one card field like it.
+# Splitting on every semicolon shreds those into fragments that match no
+# product, and the constraint that should have been the most discriminating
+# thing the customer said contributes nothing.
+#
+# The reply cannot say which semicolons were structural, but the catalog can:
+# a real field is a phrase some product actually has. So enumerate the
+# interpretations the protocol permits -- the whole payload as one field, or a
+# split at exactly one semicolon -- and take the first that every product
+# supports, preferring fewer pieces. Only when nothing is supported (paraphrase,
+# free text) does the old split-everything reading stand.
+MAX_SPLIT_POINTS = 8
+
+
+def split_disclosure(payload: str, supported=None) -> list[str]:
+    """Read one disclosure reply as the constraints it actually revealed.
+
+    `supported` answers whether a string is a phrase some catalog product has.
+    Without it -- as in a unit test, or before the index is attached -- this is
+    the old behaviour of treating every semicolon as a boundary.
+    """
+    pieces = payload.split(";")
+    if supported is None or len(pieces) < 2:
+        return pieces
+
+    points = [i for i, char in enumerate(payload) if char == ";"]
+    # Adversarial input can be all delimiters; bound the work rather than
+    # enumerate a split for each one.
+    if len(points) > MAX_SPLIT_POINTS:
+        return pieces
+
+    # One field that happens to contain semicolons.
+    if supported(payload):
+        return [payload]
+
+    # Two fields, joined at one of them.
+    for point in points:
+        left, right = payload[:point], payload[point + 1:]
+        if supported(left) and supported(right):
+            return [left, right]
+
+    return pieces
+
 # The same act of mind as OVERRIDE_RE, said the way people actually say it.
 #
 # The templated override ("...what I need is: X") is only ever spoken by the
@@ -189,6 +238,9 @@ class DialogState:
     # How many times the customer has declined to answer. The first decline of
     # a session is not evidence that the attribute is exhausted -- see `ingest`.
     declines_seen: int = 0
+    # Callable answering "is this string a phrase some catalog product has?",
+    # supplied by the agent. See `split_disclosure`.
+    supported: object = None
 
     # -- mutation ----------------------------------------------------------
 
@@ -198,7 +250,25 @@ class DialogState:
         if not text:
             return False
         key = text.lower()
-        if any(c.text.lower() == key for c in self.constraints):
+        for existing in self.constraints:
+            if existing.text.lower() != key:
+                continue
+            # Already known -- but possibly on weaker terms than it is now
+            # being stated on. An intent_override session opens by stating a
+            # background preference, which is recorded as revocable, and the
+            # customer may then disclose that same thing again as a direct
+            # answer to a question. The second statement is not revocable: the
+            # override retracts the preference the customer led with, not
+            # everything they later confirmed.
+            #
+            # Ignoring the restatement left the constraint revocable, so the
+            # override erased a field the customer had just re-asserted -- and
+            # with it the evidence that the target's card explained the whole
+            # conversation.
+            if weight > existing.weight or (existing.revocable and not revocable):
+                existing.weight = max(existing.weight, weight)
+                existing.revocable = existing.revocable and revocable
+                existing.salvaged = existing.salvaged and salvaged
             return False
         self.constraints.append(Constraint(text, weight, revocable, salvaged))
         return True
@@ -338,7 +408,7 @@ class DialogState:
         # Reply to a clarification question.
         disclosure = DISCLOSURE_RE.search(text)
         if disclosure:
-            for piece in disclosure.group(1).split(";"):
+            for piece in split_disclosure(disclosure.group(1), self.supported):
                 self.add(piece, WEIGHT_ANSWER)
             return
 
