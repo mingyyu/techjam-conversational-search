@@ -110,7 +110,7 @@ negative result is still a result.
 
 | feature | where | measured |
 |---|---|---|
-| Cross-category browsing pool | `CatalogIndex.category_neighbours` | -0.005 clean; **zero** effect under rewording -- reworded sessions never reach the named-label branch, they resolve via `resolve_categories`, which already pools up to 8 families |
+| Cross-category browsing pool | `CatalogIndex.category_neighbours`, since removed | -0.005 clean; **zero** effect under rewording -- reworded sessions never reach the named-label branch, they resolve via `resolve_categories`, which already pools up to 8 families |
 | Raised profile weight (Pillar III) | `Track.w_profile` | costs score at 0.15, 0.30 and 0.60 |
 | LLM semantic ranking | `src/llm_extract.py` | reaches 0.839 under full rewording but needs a live endpoint; organizer may disable network (`docs/submission_rules.md:100`) |
 

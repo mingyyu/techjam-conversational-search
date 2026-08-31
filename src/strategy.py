@@ -27,9 +27,6 @@ FOCUS = "focus"
 BROADEN = "broaden"
 DIVERSIFY = "diversify"
 
-# A pool this large means the opening turn barely narrowed anything.
-OVER_GENERAL_POOL = 3000
-
 # Turns of no new information before routing is treated as suspect.
 STALL_LIMIT = 2
 
@@ -41,7 +38,6 @@ EXHAUSTION_RATIO = 0.5
 class Orchestrator:
     mode: str = FOCUS
     stalled_turns: int = 0
-    over_general: bool = False
     transitions: list[str] = None
 
     def __post_init__(self) -> None:
@@ -49,10 +45,8 @@ class Orchestrator:
             self.transitions = []
 
     def observe(self, turn: int, learned_something: bool, pool_size: int,
-                shown_count: int, has_constraints: bool) -> str:
+                shown_count: int) -> str:
         """Update and return the mode for this turn."""
-        self.over_general = pool_size >= OVER_GENERAL_POOL and not has_constraints
-
         if learned_something:
             self.stalled_turns = 0
         elif turn > 1:
@@ -77,5 +71,4 @@ class Orchestrator:
     def reset(self) -> None:
         self.mode = FOCUS
         self.stalled_turns = 0
-        self.over_general = False
         self.transitions = []

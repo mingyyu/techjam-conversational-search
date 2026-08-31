@@ -50,10 +50,29 @@ class TestDialogParsing(unittest.TestCase):
         s.ingest("For that, what matters is: merino wool; packable design.")
         self.assertEqual(len(s.constraints), 2)
 
-    def test_declined_attribute_is_recorded_and_not_reasked(self):
+    def test_first_decline_is_a_deferral_not_an_exhausted_attribute(self):
+        # The Boundary scenario refuses exactly one question per session and
+        # still holds every constraint. Retiring the attribute here costs the
+        # session its highest-yield question -- see DialogState.ingest.
         s = state()
         s.ingest("I don't have a preference for material; please use your judgment.")
+        self.assertEqual(s.dead_attributes, set())
+
+    def test_repeated_decline_is_recorded_and_not_reasked(self):
+        s = state()
+        s.ingest("I don't have a preference for material; please use your judgment.")
+        s.ingest("I don't have an additional preference for material.")
         self.assertIn("material", s.dead_attributes)
+
+    def test_boundary_deferral_keeps_the_open_question_alive(self):
+        # The first question of a session is always `other`; the Boundary reply
+        # must not retire it, because the constraints are still undisclosed.
+        s = state()
+        s.ingest("I'm looking for Shoes Slippers, but I'm still exploring.")
+        s.ingest("I don't have a preference for other; please use your judgment.")
+        self.assertNotIn("other", s.dead_attributes)
+        s.ingest("For that, what matters is: memory foam; indoor outdoor sole.")
+        self.assertEqual(len(s.constraints), 2)
 
 
 class TestOverride(unittest.TestCase):
@@ -209,46 +228,41 @@ class TestProfileDistillation(unittest.TestCase):
         from src.profile import distill
         d = distill(None)
         self.assertEqual(d.query_terms, [])
-        self.assertIsNone(d.rating_target)
+        self.assertEqual(d.attribute_order, [])
+        self.assertEqual(d.popularity_trust, 0.9)
 
 
 class TestOrchestration(unittest.TestCase):
     def test_starts_focused(self):
         from src.strategy import Orchestrator, FOCUS
-        self.assertEqual(Orchestrator().observe(1, True, 500, 0, True), FOCUS)
+        self.assertEqual(Orchestrator().observe(1, True, 500, 0), FOCUS)
 
     def test_stall_escalates_to_broaden(self):
         from src.strategy import Orchestrator, BROADEN
         o = Orchestrator()
-        o.observe(1, True, 500, 0, True)
-        o.observe(2, False, 500, 10, True)
-        self.assertEqual(o.observe(3, False, 500, 20, True), BROADEN)
+        o.observe(1, True, 500, 0)
+        o.observe(2, False, 500, 10)
+        self.assertEqual(o.observe(3, False, 500, 20), BROADEN)
 
     def test_new_information_resets_the_stall_counter(self):
         from src.strategy import Orchestrator, FOCUS
         o = Orchestrator()
-        o.observe(1, True, 500, 0, True)
-        o.observe(2, False, 500, 10, True)
-        o.observe(3, True, 500, 20, True)
+        o.observe(1, True, 500, 0)
+        o.observe(2, False, 500, 10)
+        o.observe(3, True, 500, 20)
         self.assertEqual(o.mode, FOCUS)
 
     def test_pool_exhaustion_forces_broaden(self):
         from src.strategy import Orchestrator, BROADEN
         o = Orchestrator()
-        self.assertEqual(o.observe(2, True, 40, 30, True), BROADEN)
-
-    def test_over_generality_is_flagged(self):
-        from src.strategy import Orchestrator
-        o = Orchestrator()
-        o.observe(1, False, 9000, 0, False)
-        self.assertTrue(o.over_general)
+        self.assertEqual(o.observe(2, True, 40, 30), BROADEN)
 
     def test_transitions_are_recorded(self):
         from src.strategy import Orchestrator
         o = Orchestrator()
-        o.observe(1, True, 500, 0, True)
-        o.observe(2, False, 500, 10, True)
-        o.observe(3, False, 500, 20, True)
+        o.observe(1, True, 500, 0)
+        o.observe(2, False, 500, 10)
+        o.observe(3, False, 500, 20)
         self.assertTrue(any("->" in t for t in o.transitions))
 
 
@@ -310,3 +324,82 @@ class DualTrackRoutingTests(unittest.TestCase):
     def test_browsing_track_spreads_picks_and_buying_does_not(self):
         self.assertTrue(TRACKS[BROWSING].diversify_early)
         self.assertFalse(TRACKS[BUYING].diversify_early)
+
+
+class TestFreeFormRetraction(unittest.TestCase):
+    """Retracting a subject in words a person would actually use.
+
+    `TestOverride` above covers the templated form. This is the same act said
+    conversationally, which until recently appended a constraint instead of
+    clearing one -- so "never mind, show me shoes" kept ranking against coats.
+    """
+
+    def test_retraction_clears_salvaged_state(self):
+        s = state()
+        s.ingest("Hello! What is a good winter jacket")
+        self.assertEqual(len(s.constraints), 1)
+        self.assertTrue(s.free_text)
+        s.ingest("okay never mind, gimme some nice sports shoes then")
+        self.assertEqual(len(s.constraints), 1)
+        self.assertNotIn("jacket", s.constraints[0].text)
+        self.assertEqual(len(s.free_text), 1)
+
+    def test_retraction_keeps_stated_requirements(self):
+        s = state()
+        s.ingest("I'm looking for Boots. A key requirement is: steel toe.")
+        s.ingest("never mind the colour, show me something else")
+        self.assertIn("steel toe", {c.text for c in s.constraints})
+
+    def test_retraction_readmits_eliminated_products(self):
+        s = state()
+        s.ingest("a warm coat")
+        s.shown.update({"A1", "A2"})
+        s.ingest("forget that, I want running shoes")
+        self.assertEqual(s.shown, set())
+
+    def test_ordinary_paraphrase_is_not_a_retraction(self):
+        """The expensive failure mode: a first draft matched "actually",
+        "instead" and "that's not a ...", which are ordinary filler in reworded
+        messages that are *adding* information. Wiping state on those cost 0.054
+        on the natural set and 0.058 on the indirect set."""
+        for message in ("actually I really need it waterproof",
+                        "no, show me something warmer",
+                        "I want a jacket, not a vest",
+                        "instead of wool I would take fleece"):
+            s = state()
+            s.ingest("I'm looking for Jackets. A key requirement is: waterproof.")
+            s.ingest(message)
+            self.assertIn("waterproof", {c.text for c in s.constraints}, message)
+            self.assertGreater(len(s.free_text), 0, message)
+
+
+class TestOpenQuestionRetirement(unittest.TestCase):
+    """The agent must stop asking "anything else?" when it stops working.
+
+    Only the simulator declines in the exact words NO_PREFERENCE_RE matches, so
+    against a real person the open question was re-asked every turn for ten
+    turns and the attribute picker was never reached.
+    """
+
+    def test_open_question_retires_when_nothing_filterable_lands(self):
+        from src.shopping_agent import OPEN_ASK_LIMIT
+        s = state()
+        for _ in range(OPEN_ASK_LIMIT):
+            s.open_asks += 1
+        self.assertTrue(ShoppingAgent._open_is_spent(s))
+
+    def test_open_question_survives_while_the_session_is_landing_information(self):
+        from src.shopping_agent import OPEN_ASK_LIMIT
+        s = state()
+        s.ingest("I'm looking for Boots. A key requirement is: steel toe.")
+        s.open_asks = OPEN_ASK_LIMIT + 5
+        self.assertFalse(ShoppingAgent._open_is_spent(s))
+
+
+class TestSingularFolding(unittest.TestCase):
+    def test_singular_folds_plurals_without_mangling_words(self):
+        from src.catalog import singular
+        self.assertEqual(singular("jackets"), "jacket")
+        self.assertEqual(singular("shoes"), "shoe")
+        self.assertEqual(singular("dress"), "dress")   # -ss is not a plural
+        self.assertEqual(singular("gas"), "gas")       # too short to fold

@@ -4,8 +4,10 @@ A multi-turn shopping agent that finds a customer's intended product in a frozen
 50,000-item Amazon catalog within ten turns — running entirely on the Python
 standard library, with **zero API calls, zero tokens, and zero cost**.
 
-**TechnicalScore 0.973500** on the official evaluator (Hit Rate@10 **1.000**,
-MRR 0.983, MTTC 2.08), against a published baseline of 0.107.
+**TechnicalScore 0.974950** on the official evaluator (Hit Rate@10 **1.000**,
+MRR 0.9858, MTTC 2.040), against a published baseline of 0.1067 — a 9.1×
+improvement. Hit Rate@10 is 1.000 in all four scenario types, and 196 of the
+200 conversions land at rank 1.
 
 ---
 
@@ -48,17 +50,37 @@ much of the pool is spent — and escalates `focus → broaden → diversify`.
 
 **We built the test set that could prove us wrong.**
 
-The 200 public sessions are clean templated sentences. The private 800 need not
-be. Most of our effort went into finding out how badly that would hurt, rather
+We are scored on 200 public sessions and graded on 800 private ones that use
+**different users and different target products**. Tuning against a 200-session
+set with about a dozen knobs is how you produce a number that does not survive
+the swap, so most of our effort went into finding out where it would break rather
 than into polishing the number we could see.
 
-We generated **seven perturbation styles** — natural, terse, rambling, typos,
-indirect, renamed categories, and information-loss — using a separate model that
-was deliberately never shown our parser, so the test could not be tuned against.
-Then we built **three session pools**: the public 200, plus 800 unseen products
-resampled to match the real purchase-popularity profile, plus 800 sampled
-uniformly as an adversarial check on whether our popularity prior was
+**The real exposure is product generalisation, so that is what we measured
+first.** We built two additional 800-session pools from the same frozen catalog:
+one resampled to reproduce the *purchase-popularity profile* of real Amazon
+orders, which is the closest available proxy for the private set, and one sampled
+uniformly as a deliberately adversarial check on whether our popularity prior was
 load-bearing.
+
+| Pool (official wording) | TechnicalScore | Hit@10 |
+|---|---|---|
+| public 200 (the set we can see) | 0.974950 | 1.000 |
+| **matched 800 — unseen products, purchase-like popularity** | **0.957786** | 0.989 |
+| long-tail 800 — uniform sample, adversarial | 0.925450 | 0.968 |
+
+**0.9578 is our honest estimate for the private set, not the public 0.9749.**
+And if the private targets turned out to be long-tail after all — which the
+specification makes unlikely, since it anchors them on real purchase records —
+we would give up a further 0.032, with Hit@10 still at 0.968. There is no cliff
+anywhere in that range.
+
+**Then we hardened the parts a benchmark cannot see.** The specification reserves
+the right to add natural-language paraphrasing, and any agent that would survive
+contact with a real shopper has to read free text anyway. So we generated **seven
+perturbation styles** — natural, terse, rambling, typos, indirect, renamed
+categories, and information-loss — using a separate model that was deliberately
+never shown our parser, so the test could not be tuned against.
 
 That harness found things the score alone never would:
 
@@ -72,12 +94,18 @@ That harness found things the score alone never would:
 
 | Style (public 200) | Inherited | Ours |
 |---|---|---|
-| official wording | 0.9068 | **0.9735** |
-| natural | 0.4967 | **0.8350** |
-| terse | 0.4520 | **0.8773** |
-| typos | 0.4520 | **0.8737** |
-| indirect | 0.4819 | **0.7954** |
-| rambling | 0.8815 | **0.9347** |
+| official wording | 0.9068 | **0.974950** |
+| rambling | 0.8815 | **0.936576** |
+| renamed categories | 0.8832 | **0.931116** |
+| terse | 0.4520 | **0.890260** |
+| typos | 0.4520 | **0.882156** |
+| natural | 0.4967 | **0.841981** |
+| indirect | 0.4819 | **0.802883** |
+
+We also perturbed **every fitted constant at once** by a uniform random factor, to
+test whether our parameters sat on a peak or a plateau. At ±25% the worst of eight
+draws costs 0.003 and Hit@10 stays at 1.000; at ±50% one draw scores *above* the
+shipped configuration. The constants are not load-bearing — the architecture is.
 
 ---
 
@@ -99,9 +127,9 @@ hedge: it locks the rank in. Priced against one session in two hundred, an extra
 turn costs 0.0001 of score, lifting a session from rank 3 to rank 1 gains
 0.0010, and losing a hit costs 0.0025. So while the customer still has something
 to disclose the agent returns only its single best candidate and spends the turn
-asking; once they run dry it returns the full ten and sweeps. Public 0.9102 →
-**0.9735**, Hit@10 unchanged at 1.000, and every one of the sixteen
-pool-by-wording combinations we measured improved.
+asking; once they run dry it returns the full ten and sweeps. Public 0.9095 →
+**0.9749** and matched-800 0.8901 → **0.9578**, Hit@10 unchanged at 1.000, and
+every one of the sixteen pool-by-wording combinations we measured improved.
 
 The commitment window is three turns because that is the *simulator's* schedule,
 not a number we fitted: an intent card holds at most four constraints and a
@@ -109,7 +137,7 @@ reply releases two, so nothing new arrives after turn 3. Past that the curve
 turns over on Hit@10, which is exactly where the pricing says it should.
 
 **Most of the remaining headroom is genuinely unreachable.** With Hit@10 at
-1.000 and 195 of 200 conversions at rank 1, 0.019 of score is left and MTTC
+1.000 and 196 of 200 conversions at rank 1, 0.019 of score is left and MTTC
 cannot fall below 1.390 — an intent-override session is forbidden from
 converting before its override lands on turn 3 or 4. Knowing that stopped us
 burning time on a wall.
@@ -146,9 +174,15 @@ properly is still a result.
 | Model / API | None |
 | Token usage | 0 prompt, 0 completion |
 | Estimated cost | **$0.00** |
-| Per-turn latency | median **8.8 ms**, p95 61 ms, p99 79 ms |
-| Start-up (one-time index build) | 8.2 s |
-| Full 200-session evaluation | 6.7 s |
+| Per-turn latency | median **12.8 ms**, p95 97 ms, p99 128 ms, max 168 ms |
+| Start-up (one-time index build) | 12.1 s |
+| Full 200-session evaluation | 13.4 s |
+
+Absolute timings are hardware-dependent — this run is on a machine roughly 1.5×
+slower than an earlier recorded one. Zero tokens, zero cost and no network are
+properties of the agent, not of the machine: it reads no environment variable and
+opens no socket, so it runs unchanged under whatever CPU, memory, timeout and
+network restrictions the organizer imposes.
 
 Runs are deterministic and byte-identical across repeats.
 
@@ -161,6 +195,16 @@ almost any work looks like progress. Separating real improvement from overfittin
 meant building held-out product pools and blind perturbation sets *before*
 trusting any number, and reverting two changes that looked like wins on the data
 we had tuned on.
+
+## Team contributions
+
+| Member | Contribution |
+|---|---|
+| **Ng Ming Yu** | Retrieval core and ranking — catalog indexing, BM25, the IDF-weighted phrase index, and the commit-to-one-pick recommendation policy (`src/catalog.py`, `src/shopping_agent.py`) |
+| **Aeson Ng** | Dual-track intent routing — buying/browsing inference and the per-track retrieval weights (`src/routing.py`) |
+| **Seng Boon Kiat** | Dialog state machine — weighted slots, intent-override handling, retraction, and the elimination-validity rule (`src/dialog.py`) |
+| **Nathan Quek Xiu Han** | Runtime orchestration and personalized context distillation — the `focus → broaden → diversify` supervisor and the profile layer (`src/strategy.py`, `src/profile.py`) |
+| **Nguyen Duy Minh** | Evaluation and robustness — the held-out session pools, the seven blind perturbation sets, the overfitting audit, and the test suite (`heldout_eval.py`, `reports/`, `tests/`) |
 
 ## What's next
 

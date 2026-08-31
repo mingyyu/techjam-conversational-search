@@ -19,14 +19,14 @@ Two tracks, because the two intents want opposite things from retrieval:
               strength -- it is the only signal left -- and diversify picks from
               the first turn so each round covers more distinct ground.
 
-Cross-category pooling for the browsing track is implemented
-(``CatalogIndex.category_neighbours``) but is **off**: measured on the public
-set it costs 0.005 of clean score and changes nothing under reworded input,
-because reworded sessions never reach the named-label branch -- they resolve
-categories from the whole sentence via ``resolve_categories``, which already
-pools up to eight families. Cross-category matching therefore already happens
-on the path where recall is actually at risk. Raising the profile weight on the
-browsing track was measured too, and also costs score. See reports/tier2.md.
+Pooling neighbouring product families for the browsing track was built and
+then removed: measured on the public set it cost 0.005 of clean score and
+changed nothing under reworded input, because reworded sessions never reach the
+named-label branch -- they resolve categories from the whole sentence via
+``resolve_categories``, which already pools up to eight families. That is the
+path where recall is actually at risk, and it already widens. Raising the
+profile weight on the browsing track was measured too, and also costs score.
+See reports/tier2.md.
 
 Detection is lexical and structural, never template-shaped, because the private
 sessions may not be templated. Three inputs:
@@ -85,7 +85,6 @@ class Track:
     w_bm25: float
     w_popularity: float
     w_profile: float
-    cross_category: bool      # pool neighbouring categories, not just the named one
     diversify_early: bool     # spread picks across sellers from the first turn
 
 
@@ -104,7 +103,6 @@ TRACKS = {
         # pool. See reports/tier2.md.
         w_popularity=6.0,
         w_profile=0.05,      # the customer told us what they want; don't second-guess
-        cross_category=False,
         diversify_early=False,
     ),
     BROWSING: Track(
@@ -113,7 +111,6 @@ TRACKS = {
         w_bm25=0.3,
         w_popularity=6.0,    # with no constraint, the purchase prior is the signal
         w_profile=0.05,
-        cross_category=False,
         diversify_early=True,
     ),
 }

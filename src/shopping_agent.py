@@ -38,21 +38,20 @@ from .profile import distill
 from .routing import IntentRouter, TRACKS, BROWSING
 from .strategy import Orchestrator, BROADEN, DIVERSIFY
 
-# Blend weights. Tuned on the 200 public sessions; see tune.py.
-W_PHRASE = 7.0      # exact attribute-phrase agreement
-W_BM25 = 0.3        # lexical similarity
-W_POPULARITY = 6.0  # purchase prior
-W_PROFILE = 0.05    # anonymised preference tags
-W_RATING_FIT = 0.0  # measured negative on the public set; see README
-USE_PROFILE = True          # personalized context distillation
-USE_ORCHESTRATION = True    # runtime strategy switching
-USE_DUAL_TRACK = True       # buying/browsing intent routing; see src/routing.py
+# Blend weights live per-track in TRACKS (src/routing.py); tune.py sweeps them.
+# Scoring a candidate against the customer's own average prior rating was tried
+# here and measured negative on the public set, so no rating-fit term ships.
 BROADEN_POOL = 3000         # candidates pulled in when routing looks wrong
-POOL_TRUST_LIMIT = 3000     # above this the pool was never really narrowed,
-                            # so the buying track stops discounting the prior
-CROSS_CATEGORY_FLOOR = 400  # browse wider only when the named aisle is this thin
-                            # (inert: browsing track ships cross_category=False)
 STORE_CAP = 2               # max picks per seller while diversifying
+
+# How many times the open-ended question may be asked before the agent gives up
+# on it and asks about a concrete attribute instead. See _choose_question.
+#
+# Set to match COMMIT_TURNS: the open question gets the whole disclosure window,
+# and only once that window has closed without producing anything filterable is
+# it treated as spent. Dropping it to 2 cuts the window short and costs ~0.013
+# across the reworded robustness sets; raising it to 4 buys nothing.
+OPEN_ASK_LIMIT = 3
 
 # Recommendation-list depth, by turn.
 #
@@ -80,13 +79,11 @@ STORE_CAP = 2               # max picks per seller while diversifying
 # lands on turn 3 or 4, inside the same window.
 #
 # Measured, offline, no other change (see reports/commit_depth.json):
-#   public 200    0.910201 -> 0.973500   Hit@10 1.000 -> 1.000
-#   matched 800   0.884850 -> 0.945480   Hit@10 0.990 -> 0.978
-#   heldout 800   0.872940 -> 0.912140   Hit@10 0.970 -> 0.956
+#   public 200    0.909451 -> 0.974950   Hit@10 1.000 -> 1.000
+#   matched 800   0.890070 -> 0.957786   Hit@10 0.995 -> 0.989
+#   heldout 800   0.883205 -> 0.925450   Hit@10 0.981 -> 0.968
 COMMIT_TURNS = 3            # turns spent committing to a single best pick
 COMMIT_WIDTH = 1            # how many candidates to return during those turns
-SEMANTIC_EXPANSION = False  # corpus-learned synonym bridging; see reports/robustness.md
-EXPANSION_DECAY = 0.45      # a synonym is worth this fraction of a literal hit
 
 ATTRIBUTES = ("category", "material", "color", "size", "style",
               "brand", "budget", "feature", "use_case", "other")
@@ -160,12 +157,35 @@ class ShoppingAgent:
         # so anything discarded while conversion was suppressed comes back.
         if turn == 5:
             state.readmit_early_turns()
-        before = (len(state.constraints), state.category, tuple(state.categories))
-        state.ingest(user_message)
-        changed = (len(state.constraints), state.category, tuple(state.categories)) != before
+        # Two different questions, and conflating them is a bug in both
+        # directions.
+        #
+        # `changed` -- did the pool's inputs move, so must it be rebuilt? A
+        # retraction swaps one salvaged constraint for another and leaves every
+        # count identical, so the constraint signature alone misses it and the
+        # agent keeps serving the subject the customer just abandoned. What
+        # actually feeds `_select_candidates` includes `free_text`, so that is
+        # what the rebuild test has to watch.
+        #
+        # `learned` -- did the customer tell us anything that narrows? This one
+        # drives the orchestrator's stall detector, and it must NOT count a turn
+        # of free text that added no constraint. Every lexical turn appends to
+        # `free_text` whether or not it carried content, so watching that here
+        # would mean the session never registers as stalled and never escalates
+        # out of `focus` -- measured at -0.11 on the reworded sets.
+        def pool_inputs():
+            return (len(state.constraints), state.category,
+                    tuple(state.categories), tuple(state.free_text))
 
-        track = (self.router.observe(user_message, state, turn)
-                 if USE_DUAL_TRACK else TRACKS[BROWSING])
+        def narrowing_inputs():
+            return (len(state.constraints), state.category, tuple(state.categories))
+
+        before_pool, before_narrowing = pool_inputs(), narrowing_inputs()
+        state.ingest(user_message)
+        changed = pool_inputs() != before_pool
+        learned = narrowing_inputs() != before_narrowing
+
+        track = self.router.observe(user_message, state, turn)
         # The track decides how the pool is built, so a switch rebuilds it.
         if self._candidates is None or changed or track.name != self._track.name:
             self._track = track
@@ -173,11 +193,10 @@ class ShoppingAgent:
 
         mode = self.orchestrator.observe(
             turn=turn,
-            learned_something=changed,
+            learned_something=learned,
             pool_size=len(self._candidates),
             shown_count=len(state.shown),
-            has_constraints=state.has_information(),
-        ) if USE_ORCHESTRATION else "focus"
+        )
 
         if mode in (BROADEN, DIVERSIFY):
             self._candidates = self._broadened(state, self._candidates)
@@ -206,24 +225,17 @@ class ShoppingAgent:
     def _select_candidates(self, state: DialogState, track) -> list[int]:
         """Category filter first; fall back to lexical retrieval.
 
-        Both tracks keep the named-label filter strict. Adjacent-family pooling
-        is wired up for the browsing track but ships disabled: it was measured
-        to cost score and to change nothing under reworded input, because
-        reworded sessions take the `resolve_categories` path below, which
-        already pools every plausible family. See src/routing.py.
+        Both tracks keep the named-label filter strict. Pooling adjacent
+        product families was tried and removed: it was measured to cost score
+        and to change nothing under reworded input, because reworded sessions
+        take the `resolve_categories` path below, which already pools every
+        plausible family.
         """
         labels = state.categories or ([state.category] if state.category else [])
         if labels:
             pooled: list[int] = []
             for label in labels:
                 pooled.extend(self.index.category_lookup(label))
-            # Cross-category scenario matching, browsing track only, and only
-            # when the named aisle is small enough that recall is genuinely at
-            # risk. Widening a large pool measurably hurts: it adds candidates
-            # that can outrank the target without adding the target.
-            if track.cross_category and len(set(pooled)) < CROSS_CATEGORY_FLOOR:
-                for label in labels:
-                    pooled.extend(self.index.category_neighbours(label))
             if pooled:
                 return list(dict.fromkeys(pooled))
 
@@ -272,12 +284,7 @@ class ShoppingAgent:
         cached = self._bm25_cache.get(text)
         if cached is not None:
             return cached
-        tokens = tokenize(text)
-        if SEMANTIC_EXPANSION:
-            scores = self.index.bm25_weighted(
-                self.index.expand(tokens, decay=EXPANSION_DECAY))
-        else:
-            scores = self.index.bm25(tokens)
+        scores = self.index.bm25(tokenize(text))
         top = max(scores.values(), default=0.0)
         if top > 0:
             scores = {pos: value / top for pos, value in scores.items()}
@@ -288,28 +295,15 @@ class ShoppingAgent:
               top_k: int, track, diversify: bool = False) -> list[str]:
         totals: dict[int, float] = defaultdict(float)
 
-        trust = self.profile.popularity_trust if USE_PROFILE else 1.0
-        target_rating = self.profile.rating_target if USE_PROFILE else None
+        trust = self.profile.popularity_trust
 
-        # Slot decay on the popularity prior.
-        #
-        # The buying track discounts the prior so a stated requirement is not
-        # dragged back towards best-sellers. That is only safe when the pool is
-        # small enough to mean the requirement actually narrowed something. When
-        # the customer's wording left the category vague the pool stays huge,
-        # the constraint is not trustworthy, and the prior is the best signal
-        # available -- so the discount decays back to the browsing weight in
-        # proportion to how little the pool was narrowed.
-        w_popularity = track.w_popularity
-        if len(candidates) > POOL_TRUST_LIMIT:
-            w_popularity = TRACKS[BROWSING].w_popularity
-
+        # The purchase prior, scaled by how much this customer's rating style
+        # says crowd favourites should count for them. Both tracks weight it
+        # equally: discounting it on the buying track was measured and reverted,
+        # because the gain is anti-correlated with target popularity and the
+        # targets are real purchases.
         for pos in candidates:
-            score = w_popularity * trust * self.index.popularity[pos]
-            if target_rating is not None:
-                gap = abs(self.index.avg_rating[pos] - target_rating)
-                score += W_RATING_FIT * max(0.0, 1.0 - gap / 2.0)
-            totals[pos] = score
+            totals[pos] = track.w_popularity * trust * self.index.popularity[pos]
 
         candidate_set = set(candidates)
 
@@ -325,8 +319,7 @@ class ShoppingAgent:
                 if pos in candidate_set:
                     totals[pos] += weight * track.w_bm25 * value
 
-        terms = self.profile.query_terms if USE_PROFILE else [
-            str(t) for t in (state.profile.get("preference_tags") or [])]
+        terms = self.profile.query_terms
         if terms:
             for pos, value in self._constraint_scores(" ".join(terms)).items():
                 if pos in candidate_set:
@@ -375,14 +368,15 @@ class ShoppingAgent:
         producing new information we fall back to the attribute that splits the
         remaining pool most evenly.
         """
-        if "other" not in state.dead_attributes:
+        if "other" not in state.dead_attributes and not self._open_is_spent(state):
+            state.open_asks += 1
             return "other"
 
         # If the customer has explicitly asked for a specific question, skip
         # the profile's generic ordering and go straight to the attribute that
         # splits the remaining pool most evenly. Reachable only via
         # dialog.BOUNDARY_RE, which is a guard -- see the note there.
-        if not state.wants_specific and USE_PROFILE:
+        if not state.wants_specific:
             for attribute in self.profile.attribute_order:
                 if attribute not in state.dead_attributes:
                     return attribute
@@ -410,6 +404,27 @@ class ShoppingAgent:
             return best_attribute
         remaining = [a for a in ATTRIBUTES if a not in state.dead_attributes]
         return remaining[0] if remaining else "feature"
+
+    @staticmethod
+    def _open_is_spent(state: DialogState) -> bool:
+        """Whether "anything else?" has stopped earning its turn.
+
+        The open question is the right opener: it costs nothing and it lets the
+        customer volunteer the thing we would never have thought to ask about.
+        It is retired when the customer declines it -- but only the simulator
+        declines in the exact words `NO_PREFERENCE_RE` matches, so against a
+        real person the agent asked it every turn for ten turns and never
+        reached the attribute picker below.
+
+        So retire it on evidence instead of on wording: if it has been asked
+        `OPEN_ASK_LIMIT` times and the session still has neither a resolved
+        product family nor a single filterable constraint, the open question is
+        not the thing that is going to produce one. Sessions that *are* landing
+        information keep it, which is why the scored path is unaffected.
+        """
+        return (state.open_asks >= OPEN_ASK_LIMIT
+                and not state.category
+                and not state.has_hard_constraint())
 
     # -- customer-facing text ---------------------------------------------
 
