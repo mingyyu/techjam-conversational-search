@@ -1,0 +1,46 @@
+{
+ "note": "Is the popularity prior load-bearing, or a fragile bet on the public set's popularity profile? Answered by forcing w_popularity on both tracks and re-running all three session pools. The long-tail 800 samples the catalog uniformly (median popularity rank 82) and is the most hostile private set that could plausibly be constructed.",
+ "reproduce": "set w_popularity on both TRACKS in src/routing.py, then run heldout_eval.run_evaluation() against each pool",
+ "measured_on": "2026-08-31, shipped code (COMMIT_TURNS=3, free-text fixes in)",
+ "results": [
+  {
+   "w_popularity": 6.0,
+   "shipped": true,
+   "public_200": 0.97495,
+   "public_200_hit": 1.0,
+   "matched_800": 0.957786,
+   "matched_800_hit": 0.9888,
+   "longtail_800": 0.92545,
+   "longtail_800_hit": 0.9675
+  },
+  {
+   "w_popularity": 3.0,
+   "shipped": false,
+   "public_200": 0.972404,
+   "public_200_hit": 1.0,
+   "matched_800": 0.954939,
+   "matched_800_hit": 0.9862,
+   "longtail_800": 0.930538,
+   "longtail_800_hit": 0.9725
+  },
+  {
+   "w_popularity": 0.0,
+   "shipped": false,
+   "public_200": 0.941814,
+   "public_200_hit": 0.99,
+   "matched_800": 0.922758,
+   "matched_800_hit": 0.9675,
+   "longtail_800": 0.928992,
+   "longtail_800_hit": 0.97
+  }
+ ],
+ "conclusion": {
+  "gain_when_targets_are_real_purchases": {
+   "public": 0.033136,
+   "matched": 0.035028
+  },
+  "cost_when_targets_are_uniformly_sampled": 0.005088,
+  "hit_rate_at_10_floor_across_all_configs": 0.9675,
+  "reading": "The prior pays about seven times more when the data matches its assumption than it costs when the data is adversarial, and Hit@10 never falls below 0.967 in any configuration. It is a cheap tiebreaker, not a load-bearing assumption: category routing, slot state and the commit-to-one-pick policy carry the score."
+ }
+}

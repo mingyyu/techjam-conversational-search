@@ -1,11 +1,13 @@
 """Personalized context distillation.
 
 The harness supplies an anonymised aggregate profile, not a purchase history.
-It carries three usable signals:
+Two of its fields are usable:
 
 * ``preference_tags``  -- a closed vocabulary of nine shopping concerns.
 * ``rating_style``     -- how the customer rates: positive, mixed, critical.
-* ``average_prior_rating`` -- the level they rate at.
+
+``purchase_frequency`` is identical across all 200 public sessions, so it
+carries no signal and is not read.
 
 Distillation converts those into two things the ranker can act on: catalog
 vocabulary to search for, and a per-session adjustment to how much the
@@ -58,14 +60,7 @@ class DistilledProfile:
     query_terms: list[str] = field(default_factory=list)
     attribute_order: list[str] = field(default_factory=list)
     popularity_trust: float = 1.0
-    rating_target: float | None = None
     tags: list[str] = field(default_factory=list)
-
-    def summary(self) -> str:
-        """One line for logs and demo output."""
-        tags = ", ".join(self.tags) or "no tags"
-        return (f"tags[{tags}] popularity_trust={self.popularity_trust:.2f} "
-                f"rating_target={self.rating_target}")
 
 
 def distill(profile: dict | None) -> DistilledProfile:
@@ -87,14 +82,9 @@ def distill(profile: dict | None) -> DistilledProfile:
     style = str(profile.get("rating_style") or "").lower()
     trust = RATING_STYLE_TRUST.get(style, 0.9)
 
-    rating_target = profile.get("average_prior_rating")
-    if not isinstance(rating_target, (int, float)):
-        rating_target = None
-
     return DistilledProfile(
         query_terms=list(dict.fromkeys(terms)),
         attribute_order=attribute_order,
         popularity_trust=trust,
-        rating_target=float(rating_target) if rating_target is not None else None,
         tags=tags,
     )

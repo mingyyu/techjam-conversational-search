@@ -92,6 +92,27 @@ def tokenize(text: str) -> list[str]:
             if len(t) > 1 and t.lower() not in STOPWORDS]
 
 
+def singular(token: str) -> str:
+    """Fold a plural noun onto its singular form.
+
+    Catalog labels are plural ("coats jackets & vests"); shoppers speak in the
+    singular ("a winter jacket"). Matching them literally means a customer who
+    names their product family in the singular resolves to *no* family at all
+    and gets ranked against the whole catalog by popularity. This is the whole
+    fix -- deliberately not a stemmer, which would also fold "dress"/"dres" and
+    cost precision everywhere else.
+
+    "-es" is only a two-letter plural after a sibilant ("boxes", "watches"). On
+    anything else it is a plain "-s" on a stem that already ended in "e", so
+    stripping both letters turns "shoes" into "sho".
+    """
+    if len(token) <= 3 or not token.endswith("s") or token.endswith("ss"):
+        return token
+    if token.endswith("es") and token[:-2].endswith(("s", "x", "z", "ch", "sh")):
+        return token[:-2]
+    return token[:-1]
+
+
 def normalise_phrase(text: str, limit: int = 180) -> str:
     """Collapse whitespace and trim punctuation so phrases compare stably."""
     cleaned = re.sub(r"\s+", " ", text).strip(" -;,.\t\n")[:limit].rstrip()
@@ -157,28 +178,15 @@ class CatalogIndex:
         self.titles: list[str] = []
         self.category_of: list[str] = []
         self.popularity: list[float] = []
-        self.avg_rating: list[float] = []
         self.store_of: list[str] = []
         self.doc_len: list[int] = []
 
         self.category_members: dict[str, list[int]] = defaultdict(list)
         self.phrase_index: dict[str, list[int]] = defaultdict(list)
         self.postings: dict[str, list[tuple[int, int]]] = defaultdict(list)
-        self.neighbours: dict[str, list] = self._load_neighbours()
 
         self._load(catalog_path)
         self._finalise()
-
-    @staticmethod
-    def _load_neighbours() -> dict[str, list]:
-        artifact = Path(__file__).with_name("semantic_neighbours.json")
-        if not artifact.exists():
-            return {}
-        try:
-            with artifact.open(encoding="utf-8") as handle:
-                return json.load(handle)
-        except (OSError, ValueError):
-            return {}
 
     # -- construction ------------------------------------------------------
 
@@ -198,13 +206,6 @@ class CatalogIndex:
                 self.category_of.append(category)
                 self.category_members[category.lower()].append(pos)
 
-                # Real purchases skew towards products with many ratings, so a
-                # mild popularity prior is a genuine signal rather than a tie
-                # break only.
-                try:
-                    self.avg_rating.append(float(product.get("average_rating") or 0.0))
-                except (TypeError, ValueError):
-                    self.avg_rating.append(0.0)
                 self.store_of.append(str(product.get("store") or ""))
 
                 ratings = product.get("rating_number") or 0
@@ -240,54 +241,25 @@ class CatalogIndex:
 
     def bm25(self, tokens: list[str], k1: float = 1.4, b: float = 0.72,
              restrict: set[int] | None = None) -> dict[int, float]:
-        """Sparse BM25 scores over the (optionally restricted) candidate set."""
-        return self.bm25_weighted([(t, 1.0) for t in tokens], k1, b, restrict)
+        """Sparse BM25 scores over the (optionally restricted) candidate set.
 
-    def bm25_weighted(self, weighted_tokens: list[tuple[str, float]],
-                      k1: float = 1.4, b: float = 0.72,
-                      restrict: set[int] | None = None) -> dict[int, float]:
-        """BM25 where each query term carries its own weight.
-
-        Expansion terms enter here at a fraction of an original term's weight,
-        so a synonym can promote a product but never outrank a literal match.
+        Sparse because only documents containing a query term are ever touched:
+        the score map is built from the postings lists rather than by scanning
+        all fifty thousand products, which is what keeps a turn under ~13 ms
+        with no index beyond the standard library.
         """
         scores: dict[int, float] = defaultdict(float)
-        for token, weight in weighted_tokens:
+        for token in tokens:
             plist = self.postings.get(token)
-            if not plist or weight <= 0.0:
+            if not plist:
                 continue
             idf = self.idf[token]
             for pos, freq in plist:
                 if restrict is not None and pos not in restrict:
                     continue
                 norm = 1.0 - b + b * (self.doc_len[pos] / self.avg_len)
-                scores[pos] += weight * idf * (freq * (k1 + 1.0)) / (freq + k1 * norm)
+                scores[pos] += idf * (freq * (k1 + 1.0)) / (freq + k1 * norm)
         return scores
-
-    def expand(self, tokens: list[str], decay: float = 0.45,
-               per_term: int = 3) -> list[tuple[str, float]]:
-        """Add corpus-learned synonyms to a query.
-
-        BM25 cannot match a requirement phrased in vocabulary the product page
-        never uses. The neighbour table, learned by LSA over this catalog,
-        supplies the missing bridge. Absent the artifact this returns the
-        original query unchanged, so the agent degrades to pure lexical
-        matching rather than failing.
-        """
-        out: list[tuple[str, float]] = [(t, 1.0) for t in tokens]
-        if not self.neighbours:
-            return out
-        original = set(tokens)
-        added: dict[str, float] = {}
-        for token in tokens:
-            for neighbour, similarity in self.neighbours.get(token, [])[:per_term]:
-                if neighbour in original:
-                    continue
-                weight = decay * float(similarity)
-                if weight > added.get(neighbour, 0.0):
-                    added[neighbour] = weight
-        out.extend(added.items())
-        return out
 
     def phrase_lookup(self, phrase: str) -> list[int]:
         return self.phrase_index.get(normalise_phrase(phrase), [])
@@ -326,13 +298,13 @@ class CatalogIndex:
         As with `category_lookup`, every plausible family above the floor is
         pooled instead of committing to the best one.
         """
-        spoken = set(tokenize(text))
+        spoken = {singular(t) for t in tokenize(text)}
         if not spoken:
             return []
 
         scored: list[tuple[float, int, str]] = []
         for label in self.category_members:
-            words = set(tokenize(label))
+            words = {singular(w) for w in tokenize(label)}
             if not words:
                 continue
             coverage = len(words & spoken) / len(words)
@@ -351,51 +323,17 @@ class CatalogIndex:
                 break
         return list(dict.fromkeys(pooled))
 
-    def category_neighbours(self, label: str, floor: float = 0.34,
-                            top_n: int = 6, cap: int = 20000) -> list[int]:
-        """Products from families adjacent to the one named.
-
-        Cross-category scenario matching, for the browsing track. A customer who
-        is still exploring "Shoes Fashion Sneakers" is plausibly also served by
-        "Shoes Athletic" or "Shoes Fashion Boots", and the purchase they
-        eventually make need not sit in the aisle they happened to name first.
-
-        The buying track must not do this: a stated requirement is precise, and
-        widening the pool there only adds ways to rank the wrong thing highly.
-        """
-        wanted = set(tokenize(label)) - GENERIC_CATEGORY_PARTS
-        if not wanted:
-            return []
-
-        scored: list[tuple[float, int, str]] = []
-        for candidate in self.category_members:
-            other = set(tokenize(candidate)) - GENERIC_CATEGORY_PARTS
-            if not other:
-                continue
-            overlap = len(wanted & other)
-            if not overlap:
-                continue
-            similarity = overlap / len(wanted | other)
-            if similarity >= floor:
-                scored.append((similarity, overlap, candidate))
-        if not scored:
-            return []
-
-        scored.sort(reverse=True)
-        pooled: list[int] = []
-        for _, _, candidate in scored[:top_n]:
-            pooled.extend(self.category_members[candidate])
-            if len(pooled) >= cap:
-                break
-        return list(dict.fromkeys(pooled))
-
     def category_lookup(self, label: str, floor: float = 0.50,
                         cap: int = 12000) -> list[int]:
-        """Resolve a spoken product family to candidate products.
+        """Resolve a named product family to candidate products.
 
-        Exact match wins outright. Otherwise similarity is the better of token
-        overlap and character-trigram overlap -- the first survives dropped or
-        reordered words, the second survives misspellings.
+        The label reaching this function is the model's paraphrase of the
+        family, not the shopper's own words, so it rarely matches a catalog
+        label verbatim. Exact match wins outright; otherwise similarity is the
+        better of token overlap and character-trigram overlap -- the first
+        absorbs dropped or reordered words ("jackets" for "coats jackets &
+        vests"), the second absorbs suffix and spacing drift ("t-shirt" for
+        "tshirts").
 
         Crucially this returns the union of every plausible family rather than
         the single best one. Committing to one label on a near-tie routes the

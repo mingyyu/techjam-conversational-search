@@ -1,0 +1,40 @@
+{
+ "note": "Free-form conversation fixes: category stemming, free-form retraction, open-question retirement. Found by reading chat.py transcripts, not by metrics. Guarded by re-running the official evaluator and all perturbation styles.",
+ "scores": {
+  "clean": {
+   "before": 0.9735,
+   "after": 0.9735,
+   "delta": 0.0
+  },
+  "natural": {
+   "before": 0.83498,
+   "after": 0.84198,
+   "delta": 0.007
+  },
+  "rambling": {
+   "before": 0.93473,
+   "after": 0.93473,
+   "delta": 0.0
+  },
+  "indirect": {
+   "before": 0.79538,
+   "after": 0.80288,
+   "delta": 0.0075
+  },
+  "typos": {
+   "before": 0.87374,
+   "after": 0.88216,
+   "delta": 0.00842
+  },
+  "terse": {
+   "before": 0.87732,
+   "after": 0.89026,
+   "delta": 0.01294
+  },
+  "categories": {
+   "before": 0.92857,
+   "after": 0.92857,
+   "delta": 0.0
+  }
+ }
+}

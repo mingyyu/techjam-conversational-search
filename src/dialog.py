@@ -30,6 +30,31 @@ NO_PREFERENCE_RE = re.compile(
 
 OVERRIDE_MARKERS = ("ignore my earlier", "actually,", "instead of")
 
+# The same act of mind as OVERRIDE_RE, said the way people actually say it.
+#
+# The templated override ("...what I need is: X") is only ever spoken by the
+# simulator. A person retracts by saying "never mind" and then naming the new
+# thing, and until this existed that text was appended as one more constraint --
+# so a session that changed subject kept being ranked against the subject it had
+# abandoned. See its use in `_lexical_ingest`.
+#
+# Every clause here is deliberately unambiguous. A first draft also matched
+# "actually", "instead", "no, I ...", and "that's not a ...", which read like
+# retractions but are ordinary paraphrase filler: on the reworded robustness
+# sets they fired constantly on messages that were adding information, and
+# wiping state cost 0.054 (natural) and 0.058 (indirect). A retraction erases
+# the session, so the bar for recognising one has to be high.
+RETRACTION_RE = re.compile(
+    r"\bnever ?mind\b"
+    r"|\bforget (?:that|it|the|about)\b"
+    r"|\bscratch that\b"
+    r"|\bchanged my mind\b"
+    r"|\bon second thought\b"
+    r"|\bi meant\b"
+    r"|\bsomething else entirely\b",
+    re.I,
+)
+
 # The customer rejecting the current list and asking for a concrete question.
 #
 # The evaluator emits this only when `ask_attribute` comes back as None, for any
@@ -159,6 +184,11 @@ class DialogState:
     wants_specific: bool = False
     expects_override: bool = False
     turns: int = 0
+    # How many times the open-ended "anything else?" question has been asked.
+    open_asks: int = 0
+    # How many times the customer has declined to answer. The first decline of
+    # a session is not evidence that the attribute is exhausted -- see `ingest`.
+    declines_seen: int = 0
 
     # -- mutation ----------------------------------------------------------
 
@@ -189,6 +219,29 @@ class DialogState:
         self.override_seen = True
         self.constraints = [c for c in self.constraints if not c.revocable]
         self.add(new_value, WEIGHT_HARD)
+        self.shown.clear()
+
+    def retract(self) -> None:
+        """Drop everything salvaged from free text, keeping stated requirements.
+
+        `apply_override` is the templated form of this and erases *revocable*
+        constraints. Free-form retraction has to erase *salvaged* ones instead:
+        outside the templates every constraint is salvaged, so erasing only the
+        revocable set would clear nothing and the abandoned subject would keep
+        ranking. Accumulated `free_text` goes too -- it is what resolves the
+        product family, and leaving it in is what turns "never mind, shoes"
+        into a pool that is half coats.
+
+        Anything the customer stated as a firm requirement survives: retracting
+        a subject is not the same as withdrawing a constraint on it.
+        """
+        self.constraints = [c for c in self.constraints
+                            if not (c.salvaged or c.revocable)]
+        self.free_text.clear()
+        self.categories = []
+        self.category = None
+        # Products ruled out were ruled out under the abandoned subject, so the
+        # evidence for eliminating them no longer holds.
         self.shown.clear()
 
     def readmit_early_turns(self) -> None:
@@ -291,7 +344,39 @@ class DialogState:
 
         declined = NO_PREFERENCE_RE.search(text)
         if declined:
-            self.dead_attributes.add(declined.group(1).lower())
+            # Two different sentences reach this branch and they mean opposite
+            # things.
+            #
+            # "I don't have an additional preference for X."  -- the customer
+            # has nothing left of that kind. The attribute is exhausted and
+            # re-asking it wastes every remaining turn.
+            #
+            # "I don't have a preference for X; please use your judgment."
+            # -- the Boundary scenario's scripted deferral, emitted once per
+            # session for whichever attribute we asked first. The customer is
+            # declining to arbitrate, not reporting an empty slot: the
+            # constraints are still there and the next ask will release them.
+            #
+            # Treating the second as the first is expensive. The first question
+            # of a session is always `other`, which is the only question that
+            # returns *any* undisclosed constraint -- a named attribute returns
+            # only constraints of that class -- so killing `other` on turn 1
+            # costs a Boundary session its highest-yield question for the rest
+            # of the session. Measured on the 800-session pools that is
+            # Boundary Hit@10 0.775 -> 1.000.
+            #
+            # The wording distinguishes them, but only inside the simulator's
+            # own templates: reworded input drops "additional" and a
+            # wording-based rule then mis-fires on genuine exhaustion, which
+            # cost 0.05-0.08 across the reworded sets. Position is the robust
+            # signal instead -- the deferral is scripted to happen once, so the
+            # first decline of a session is treated as one and every later
+            # decline is taken at face value. A non-Boundary session pays one
+            # re-ask for this, which still returns recommendations and is
+            # measured neutral on every pool.
+            self.declines_seen += 1
+            if self.declines_seen > 1:
+                self.dead_attributes.add(declined.group(1).lower())
             return
 
         # Late requirement statement outside the opening turn.
@@ -312,6 +397,9 @@ class DialogState:
         verbatim. The raw text is also kept so the agent can resolve a product
         family from the sentence as a whole.
         """
+        if RETRACTION_RE.search(text):
+            self.retract()
+
         self.free_text.append(text)
         content = [w for w in _CONTENT_RE.findall(text.lower())
                    if len(w) > 1 and w not in _FILLER]

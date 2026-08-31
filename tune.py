@@ -1,9 +1,8 @@
 """Weight sweep. Builds the index once and re-scores in-process.
 
-The knobs that matter live in ``TRACKS`` in ``src/routing.py``. The
-``W_PHRASE`` / ``W_BM25`` / ``W_POPULARITY`` constants in
-``src/shopping_agent.py`` are the pre-dual-track defaults and are no longer
-read by the ranker, so patching them sweeps nothing.
+All ranking weights live in ``TRACKS`` in ``src/routing.py``; ``set_tracks``
+patches them in place and restores them after each measurement. The other
+high-leverage knob, ``COMMIT_TURNS``, lives in ``src/shopping_agent.py``.
 """
 import dataclasses
 
