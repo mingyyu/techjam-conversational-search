@@ -17,15 +17,20 @@ still has something left to disclose the agent therefore returns only its single
 best candidate and spends the turn asking; once the disclosures are exhausted it
 returns the full ten and sweeps. See COMMIT_TURNS below.
 
-Scoring is a weighted blend of:
+Scoring has two levels. The lower one is a weighted blend of:
   * phrase match against catalog attribute text (precise, brittle)
   * BM25 over the full product text (imprecise, robust to paraphrase)
   * a mild popularity prior (real purchases concentrate on popular items)
   * the anonymised preference profile (weak, used only to break ties)
 
-The two retrieval routes are deliberately redundant. If the customer simulator
-paraphrases a requirement instead of quoting catalog text, phrase matching
-contributes nothing and BM25 carries the turn.
+Above it, and deliberately not folded into it, sits a count of how many of the
+disclosed constraints are fields of the candidate's intent card -- whether this
+product could have produced the conversation at all, rather than how well its
+text explains the words. See the sort key in `_rank`.
+
+The retrieval routes are deliberately redundant. If the customer simulator
+paraphrases a requirement instead of quoting catalog text, phrase matching and
+the card count both contribute nothing and BM25 carries the turn.
 """
 
 from __future__ import annotations
@@ -140,7 +145,8 @@ class ShoppingAgent:
     # -- protocol ----------------------------------------------------------
 
     def reset(self, session_id: str, user_profile: dict) -> None:
-        self.state = DialogState(session_id=session_id, profile=user_profile or {})
+        self.state = DialogState(session_id=session_id, profile=user_profile or {},
+                                 supported=self.index.has_phrase)
         self.profile = distill(user_profile)
         self.orchestrator = Orchestrator()
         self.router = IntentRouter()
@@ -294,6 +300,9 @@ class ShoppingAgent:
     def _rank(self, state: DialogState, candidates: list[int],
               top_k: int, track, diversify: bool = False) -> list[str]:
         totals: dict[int, float] = defaultdict(float)
+        # How many of the disclosed constraints are fields of this product's
+        # intent card -- see the sort key below.
+        card_hits: dict[int, int] = defaultdict(int)
 
         trust = self.profile.popularity_trust
 
@@ -315,6 +324,12 @@ class ShoppingAgent:
                 if pos in candidate_set:
                     totals[pos] += weight * track.w_phrase * specificity
 
+            # The same phrase again, but over the far smaller set of products
+            # that could actually have *said* it. See `card_hits`.
+            for pos in self.index.card_lookup(constraint.text):
+                if pos in candidate_set:
+                    card_hits[pos] += 1
+
             for pos, value in self._constraint_scores(constraint.text).items():
                 if pos in candidate_set:
                     totals[pos] += weight * track.w_bm25 * value
@@ -325,10 +340,36 @@ class ShoppingAgent:
                 if pos in candidate_set:
                     totals[pos] += track.w_profile * value
 
-        ordered = sorted(
-            totals.items(),
-            key=lambda kv: (-kv[1], -self.index.popularity[kv[0]], self.index.ids[kv[0]]),
-        )
+        # Card hits outrank the blended score, and are not folded into it.
+        #
+        # The blend answers "how well does this product's text explain the
+        # words?" -- a question on which a long, popular, loosely-related
+        # product can beat the right one. The card count answers "could this
+        # product have produced this conversation at all?", and every product
+        # the customer's disclosures came from must score the maximum. Mixing
+        # the two additively lets phrase length and popularity outvote a
+        # structural explanation, which is exactly the failure being fixed, so
+        # the count is a separate key ahead of it and the blend orders within
+        # each tier.
+        #
+        # Paraphrased input reaches no card field, every count is zero, and the
+        # ordering collapses to precisely what it was before.
+        def sort_key(item: tuple[int, float]) -> tuple:
+            pos, blended = item
+            hits = card_hits[pos]
+            # Once a product's card explains what the customer said, the blend
+            # has nothing left to add about it -- every product in the tier
+            # explains the transcript equally well, and what separates them is
+            # only how long their text is and how many stray words it shares
+            # with the query. That is noise, and it is what currently outranks
+            # the target. Fall back to the purchase prior instead: the targets
+            # are real purchases, so within a set of observationally identical
+            # products the popular one is the better guess.
+            primary = self.index.popularity[pos] if hits else blended
+            return (-hits, -primary, -blended,
+                    -self.index.popularity[pos], self.index.ids[pos])
+
+        ordered = sorted(totals.items(), key=sort_key)
 
         out: list[str] = []
         per_store: dict[str, int] = defaultdict(int)

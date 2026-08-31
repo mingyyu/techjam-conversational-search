@@ -7,13 +7,18 @@ Run:  python3 -m unittest discover -s tests -v
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from src.dialog import DialogState, WEIGHT_HARD, WEIGHT_SOFT
+from src.dialog import DialogState, split_disclosure, WEIGHT_HARD, WEIGHT_SOFT
 from src.routing import IntentRouter, TRACKS, BUYING, BROWSING
-from src.catalog import coarse_category, normalise_phrase, attribute_phrases
+from src.catalog import (CARD_FIELDS, CatalogIndex, attribute_phrases,
+                         card_constraints, clean_phrase, coarse_category,
+                         normalise_phrase, product_signals, searchable_text,
+                         tokenize)
 from src.shopping_agent import ShoppingAgent, ATTRIBUTES
 
 
@@ -128,6 +133,29 @@ class TestCatalogHelpers(unittest.TestCase):
 
     def test_normalise_phrase_is_stable_under_whitespace_and_case(self):
         self.assertEqual(normalise_phrase("  100%   COTTON. "), normalise_phrase("100% cotton"))
+
+    def test_normalise_phrase_collapses_unicode_whitespace(self):
+        self.assertEqual(normalise_phrase("\t100%\u00a0\nCOTTON.\r"), "100% cotton")
+
+    def test_clean_phrase_matches_legacy_regex_edge_cases(self):
+        samples = [
+            "\t100%\u00a0\nCOTTON.\r",
+            "\vA\fB\u2003C",
+            " -;,. ",
+            "word   " + "x" * 200,
+            "",
+        ]
+        for text in samples:
+            for limit in (0, 1, 180, -1):
+                legacy = re.sub(r"\s+", " ", text).strip(
+                    " -;,.\t\n")[:limit].rstrip()
+                with self.subTest(text=text, limit=limit):
+                    self.assertEqual(clean_phrase(text, limit), legacy)
+
+    def test_tokenize_folds_case_once_without_changing_stopword_filtering(self):
+        self.assertEqual(tokenize("THE Blue blue X x Cotton"),
+                         ["blue", "blue", "cotton"])
+        self.assertEqual(tokenize("İ İİ"), ["i̇i̇"])
 
     def test_attribute_phrases_include_material_and_budget(self):
         product = {"title": "Tee", "features": ["Soft cotton blend"], "price": 19.99}
@@ -403,3 +431,138 @@ class TestSingularFolding(unittest.TestCase):
         self.assertEqual(singular("shoes"), "shoe")
         self.assertEqual(singular("dress"), "dress")   # -ss is not a plural
         self.assertEqual(singular("gas"), "gas")       # too short to fold
+
+
+class TestDisclosureSplitting(unittest.TestCase):
+    """The semicolon in a reply may be a field boundary or catalog text.
+
+    `customer_reply` builds a disclosure as `"; ".join(matches)` over at most
+    two card fields, but a single field routinely contains its own semicolons.
+    Which is which is decided by what the catalog actually supports.
+    """
+
+    @staticmethod
+    def supported_by(*phrases):
+        known = {normalise_phrase(p) for p in phrases}
+        return lambda text: normalise_phrase(text) in known
+
+    def test_one_field_containing_semicolons_stays_whole(self):
+        whole = "solid colors: 100% cotton; heather grey: 90% cotton, 10% polyester"
+        self.assertEqual(
+            split_disclosure(whole, self.supported_by(whole)), [whole])
+
+    def test_two_fields_split_at_the_boundary(self):
+        pieces = split_disclosure(
+            "cotton; imported", self.supported_by("cotton", "imported"))
+        self.assertEqual([p.strip() for p in pieces], ["cotton", "imported"])
+
+    def test_a_semicolon_bearing_field_beside_a_plain_one(self):
+        left = "solid colors: 100% cotton; heather grey: 90% cotton"
+        pieces = split_disclosure(
+            f"{left}; imported", self.supported_by(left, "imported"))
+        self.assertEqual([p.strip() for p in pieces], [left, "imported"])
+
+    def test_unsupported_text_falls_back_to_splitting_everywhere(self):
+        # A paraphrase reaches no catalog phrase. Guessing a single constraint
+        # out of it would be worse than the old reading, not better.
+        pieces = split_disclosure(
+            "something soft; something warm", self.supported_by("cotton"))
+        self.assertEqual(len(pieces), 2)
+
+    def test_without_an_index_the_old_reading_stands(self):
+        self.assertEqual(split_disclosure("a; b; c"), ["a", " b", " c"])
+
+    def test_delimiter_heavy_input_is_bounded_not_enumerated(self):
+        payload = ";" * 200
+        self.assertEqual(
+            split_disclosure(payload, self.supported_by("cotton")),
+            payload.split(";"))
+
+    def test_empty_and_single_field_payloads_are_untouched(self):
+        supported = self.supported_by("cotton")
+        self.assertEqual(split_disclosure("", supported), [""])
+        self.assertEqual(split_disclosure("cotton", supported), ["cotton"])
+
+
+class TestConstraintRestatement(unittest.TestCase):
+    def test_restating_a_soft_preference_as_an_answer_promotes_it(self):
+        # An intent_override session opens with a background preference and may
+        # disclose the same thing again as a direct answer. The second
+        # statement is not revocable, so the override must not erase it.
+        s = state()
+        s.ingest("I'm looking for Jackets. Zipper closure.")
+        self.assertTrue(s.constraints[0].revocable)
+        s.ingest("For that, what matters is: Zipper closure.")
+        self.assertEqual(len(s.constraints), 1)
+        self.assertFalse(s.constraints[0].revocable)
+        s.apply_override("polyester")
+        self.assertIn("zipper closure", {c.text.lower() for c in s.constraints})
+
+    def test_a_preference_never_restated_is_still_erased(self):
+        s = state()
+        s.ingest("I'm looking for Jackets. I prefer a slim fit.")
+        s.apply_override("polyester")
+        self.assertEqual([c.text for c in s.constraints], ["polyester"])
+
+
+class TestCardConstraints(unittest.TestCase):
+    """The clean-room reconstruction of what a product would ever disclose."""
+
+    def test_card_holds_at_most_four_fields_material_and_colour_first(self):
+        product = {
+            "features": ["Machine wash", "Button closure"],
+            # Note "Material" and not "Fabric" as the key: the protocol scans
+            # key names too, and "fabric" is itself one of the material words.
+            "details": {"Material": "Black cotton blend"},
+            "price": 20,
+        }
+        card = card_constraints(product)
+        self.assertLessEqual(len(card), CARD_FIELDS)
+        self.assertEqual(card[0], "cotton")
+        self.assertEqual(card[1], "color: black")
+
+    def test_case_variants_occupy_separate_slots_as_the_protocol_builds_them(self):
+        # "polyester" from the material scan and "Polyester" from a details
+        # value are two of the four slots, not one -- but they index once.
+        product = {"features": ["Polyester", "Imported", "Zipper closure",
+                                "Machine wash"]}
+        card = card_constraints(product)
+        self.assertEqual(card.count("polyester"), 2)
+        self.assertNotIn("machine wash", card)
+
+    def test_a_product_with_no_attributes_falls_back_to_its_title(self):
+        self.assertEqual(card_constraints({"title": "Plain Tee"}), ["plain tee"])
+
+    def test_helpers_reuse_precomputed_product_signals(self):
+        product = {
+            "title": "Black cotton tee",
+            "features": ["Machine wash"],
+            "price": 20,
+        }
+        signals = product_signals(product)
+        original_values = list(signals.values)
+        with mock.patch("src.catalog.product_signals",
+                        side_effect=AssertionError("signals were recomputed")):
+            self.assertIn("cotton", attribute_phrases(product, signals=signals))
+            self.assertEqual(card_constraints(product, signals=signals)[:2],
+                             ["cotton", "color: black"])
+        self.assertEqual(signals.values, original_values)
+
+    def test_colour_stays_in_protocol_slot_without_material(self):
+        product = {"features": ["Machine wash", "Black finish"]}
+        self.assertEqual(card_constraints(product)[:2],
+                         ["machine wash", "color: black"])
+
+    def test_index_derives_searchable_text_once_per_product(self):
+        products = [
+            {"parent_asin": "A", "title": "Cotton shirt"},
+            {"parent_asin": "B", "title": "Blue hat"},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "catalog.jsonl"
+            path.write_text("".join(json.dumps(product) + "\n"
+                                    for product in products), encoding="utf-8")
+            with mock.patch("src.catalog.searchable_text",
+                            wraps=searchable_text) as wrapped:
+                CatalogIndex(path)
+        self.assertEqual(wrapped.call_count, len(products))

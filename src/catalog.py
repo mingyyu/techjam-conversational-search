@@ -4,7 +4,7 @@ Everything here is pure standard library so the agent runs with no network
 access and no third-party dependencies, which is the environment the organizer
 reserves the right to enforce at final scoring time.
 
-Three indexes are built once at start-up:
+Four indexes are built once at start-up:
 
 1. ``category_members``  -- coarse category label -> product ids.
    The opening customer turn always names the product family they are shopping
@@ -18,6 +18,13 @@ Three indexes are built once at start-up:
 3. ``postings``          -- BM25 inverted index over the product text.
    The robust fallback. If a requirement is paraphrased and never matches a
    phrase exactly, BM25 still scores it sensibly.
+
+4. ``card_index``        -- intent-card constraint -> product ids.
+   The narrow counterpart to ``phrase_index``. Where that holds everything a
+   shopper *could* say about a product, this holds only the at most four things
+   the protocol lets a product actually disclose, so a hit here explains the
+   sentence structurally rather than by coincidence of wording. See
+   ``card_constraints``.
 """
 
 from __future__ import annotations
@@ -25,8 +32,9 @@ from __future__ import annotations
 import json
 import math
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
+from typing import NamedTuple
 
 TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
 
@@ -50,6 +58,11 @@ COLORS = ("black", "white", "blue", "red", "pink", "green", "brown",
 
 MATERIAL_RE = re.compile(r"\b(" + "|".join(MATERIALS) + r")\b", re.I)
 COLOR_RE = re.compile(r"\b(" + "|".join(COLORS) + r")\b", re.I)
+
+
+# Constraints an intent card can hold: two hard, two soft. Fixed by the
+# published protocol, not tuned.
+CARD_FIELDS = 4
 
 # Top-level department names that carry no discriminative power.
 GENERIC_CATEGORY_PARTS = {
@@ -88,8 +101,9 @@ def searchable_text(product: dict) -> str:
 
 
 def tokenize(text: str) -> list[str]:
-    return [t.lower() for t in TOKEN_RE.findall(text)
-            if len(t) > 1 and t.lower() not in STOPWORDS]
+    return [lowered for token in TOKEN_RE.findall(text)
+            if len(token) > 1
+            and (lowered := token.lower()) not in STOPWORDS]
 
 
 def singular(token: str) -> str:
@@ -113,10 +127,19 @@ def singular(token: str) -> str:
     return token[:-1]
 
 
+def clean_phrase(text: str, limit: int = 180) -> str:
+    """Collapse whitespace and trim punctuation, preserving case.
+
+    Case matters in exactly one place -- see `card_constraints`, where the
+    protocol deduplicates its candidates before folding case, so "Polyester"
+    and "polyester" occupy two of the four card slots rather than one.
+    """
+    return " ".join(text.split()).strip(" -;,.\t\n")[:limit].rstrip()
+
+
 def normalise_phrase(text: str, limit: int = 180) -> str:
     """Collapse whitespace and trim punctuation so phrases compare stably."""
-    cleaned = re.sub(r"\s+", " ", text).strip(" -;,.\t\n")[:limit].rstrip()
-    return cleaned.lower()
+    return clean_phrase(text, limit).lower()
 
 
 def coarse_category(values: list[str]) -> str:
@@ -135,25 +158,52 @@ def coarse_category(values: list[str]) -> str:
     return " ".join(cleaned[-2:]) if cleaned else "clothing item"
 
 
-def attribute_phrases(product: dict, limit: int = 180) -> list[str]:
+class ProductSignals(NamedTuple):
+    """The raw material every index draws on, derived once per product.
+
+    Both phrase and card construction need the same corpus and the same
+    material and colour scans, and the BM25 pass needs the corpus again.
+    Deriving them three times is the single largest avoidable cost at
+    start-up: the two regex scans alone run over the whole product text and
+    cost more than parsing the catalog JSON.
+    """
+
+    corpus: str                 # the concatenated searchable product text
+    values: list[str]           # feature then detail values, in catalog order
+    material: str | None        # the first material word, lowercased
+    colour: str | None          # "color: <word>", or None
+    budget: str | None          # "budget around $<price>", or None
+
+
+def product_signals(product: dict) -> ProductSignals:
+    corpus = searchable_text(product)
+    material = MATERIAL_RE.search(corpus)
+    colour = COLOR_RE.search(corpus)
+    price = product.get("price")
+    return ProductSignals(
+        corpus,
+        [*flatten(product.get("features")), *flatten(product.get("details"))],
+        material.group(1).lower() if material else None,
+        f"color: {colour.group(1).lower()}" if colour else None,
+        f"budget around ${price}" if price not in (None, "") else None,
+    )
+
+
+def attribute_phrases(product: dict, limit: int = 180,
+                      signals: ProductSignals | None = None) -> list[str]:
     """Candidate requirement phrases a shopper might state for this product.
 
     Drawn from the structured attribute text plus the material, colour and
     price signals that shoppers most often lead with.
     """
-    phrases: list[str] = []
-    phrases.extend(flatten(product.get("features")))
-    phrases.extend(flatten(product.get("details")))
-
-    corpus = searchable_text(product)
-    material = MATERIAL_RE.search(corpus)
-    if material:
-        phrases.append(material.group(1).lower())
-    colour = COLOR_RE.search(corpus)
-    if colour:
-        phrases.append(f"color: {colour.group(1).lower()}")
-    if product.get("price") not in (None, ""):
-        phrases.append(f"budget around ${product['price']}")
+    signals = signals or product_signals(product)
+    phrases: list[str] = [*signals.values]
+    if signals.material:
+        phrases.append(signals.material)
+    if signals.colour:
+        phrases.append(signals.colour)
+    if signals.budget:
+        phrases.append(signals.budget)
 
     out: list[str] = []
     seen: set[str] = set()
@@ -162,6 +212,54 @@ def attribute_phrases(product: dict, limit: int = 180) -> list[str]:
         if norm and norm not in seen:
             seen.add(norm)
             out.append(norm)
+    return out
+
+
+def card_constraints(product: dict, limit: int = 180,
+                     signals: ProductSignals | None = None) -> list[str]:
+    """The at-most-four phrases the protocol will ever disclose for a product.
+
+    `attribute_phrases` above returns everything a shopper *could* say. This
+    returns what the simulated customer *will* say, and the difference is most
+    of the discriminating power: a product has dozens of feature and detail
+    lines, but the intent card is built from only the first four -- material,
+    colour, then the leading feature/detail values, with price at the end -- and
+    a reply can never disclose anything outside that set.
+
+    So a constraint that lands here is far stronger evidence than the same
+    constraint landing anywhere in a product's text. "imported" appears in
+    13,642 products' attribute text but is a card field for far fewer, and it is
+    only the card fields that could have produced the sentence we just read.
+
+    Derived from the published protocol and participant-visible catalog fields
+    only; the evaluator package is never imported by runtime code.
+    """
+    signals = signals or product_signals(product)
+    values = [*signals.values]
+    if signals.material:
+        values.insert(0, signals.material)
+    if signals.colour:
+        # The protocol always inserts colour at position one. If there is no
+        # material and attributes already exist, that deliberately makes the
+        # colour the second candidate rather than the first.
+        values.insert(1, signals.colour)
+    if signals.budget:
+        values.append(signals.budget)
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        cleaned = clean_phrase(value, limit)
+        if cleaned and cleaned not in seen:
+            seen.add(cleaned)
+            out.append(cleaned.lower())
+            if len(out) >= CARD_FIELDS:
+                break
+
+    if not out:
+        # A product with no structured attributes at all falls back to its title.
+        title = normalise_phrase(str(product.get("title") or "product"), limit)
+        return [title] if title else []
     return out
 
 
@@ -183,6 +281,7 @@ class CatalogIndex:
 
         self.category_members: dict[str, list[int]] = defaultdict(list)
         self.phrase_index: dict[str, list[int]] = defaultdict(list)
+        self.card_index: dict[str, list[int]] = defaultdict(list)
         self.postings: dict[str, list[tuple[int, int]]] = defaultdict(list)
 
         self._load(catalog_path)
@@ -215,12 +314,18 @@ class CatalogIndex:
                     ratings = 0.0
                 self.popularity.append(math.log1p(max(ratings, 0.0)))
 
-                for phrase in attribute_phrases(product):
+                signals = product_signals(product)
+                for phrase in attribute_phrases(product, signals=signals):
                     self.phrase_index[phrase].append(pos)
+                # Deduplicated: a card can spend two of its four slots on the
+                # same phrase in different case ("polyester" from the material
+                # scan, "Polyester" from a details value), and a product must
+                # not count twice for one constraint.
+                for phrase in dict.fromkeys(
+                        card_constraints(product, signals=signals)):
+                    self.card_index[phrase].append(pos)
 
-                counts: dict[str, int] = defaultdict(int)
-                for token in tokenize(searchable_text(product)):
-                    counts[token] += 1
+                counts = Counter(tokenize(signals.corpus))
                 self.doc_len.append(sum(counts.values()) or 1)
                 for token, count in counts.items():
                     self.postings[token].append((pos, count))
@@ -236,6 +341,7 @@ class CatalogIndex:
         self.popularity = [p / max_pop if max_pop else 0.0 for p in self.popularity]
         self.category_members = dict(self.category_members)
         self.phrase_index = dict(self.phrase_index)
+        self.card_index = dict(self.card_index)
 
     # -- lookup ------------------------------------------------------------
 
@@ -263,6 +369,29 @@ class CatalogIndex:
 
     def phrase_lookup(self, phrase: str) -> list[int]:
         return self.phrase_index.get(normalise_phrase(phrase), [])
+
+    def has_phrase(self, phrase: str) -> bool:
+        """Whether any product carries this exact attribute phrase.
+
+        Used by `dialog.split_disclosure` to tell a semicolon the simulator
+        inserted between two fields from one the catalog text already had.
+        """
+        return normalise_phrase(phrase) in self.phrase_index
+
+    def card_lookup(self, phrase: str) -> list[int]:
+        return self.card_index.get(normalise_phrase(phrase), [])
+
+    def card_specificity(self, phrase: str) -> float:
+        """How much a card-field match narrows the catalog.
+
+        The same inverse-frequency measure as `phrase_specificity`, over the
+        much smaller card index -- so the identical phrase scores higher here,
+        which is the point.
+        """
+        members = self.card_index.get(normalise_phrase(phrase))
+        if not members:
+            return 0.0
+        return math.log(self.size / len(members)) / math.log(self.size)
 
     def phrase_specificity(self, phrase: str) -> float:
         """How much a phrase match narrows the catalog.
